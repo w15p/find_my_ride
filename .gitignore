@@ -1,0 +1,36 @@
+# Environment and secrets
+.env
+.fb_session.json
+.fb_profile/
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.db.bak*
+listings.db.bak*
+
+# Local DB / file backups in any form
+*.bak
+*.bak.*
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
