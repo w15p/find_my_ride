@@ -1,0 +1,246 @@
+# Ford Escort Mk1 LHD Monitor — Configuration
+# Copy this file to config/config.yaml and fill in your credentials.
+# Sensitive values can also be set as environment variables (see .env.example).
+
+# ─── Search filters ───────────────────────────────────────────────────────────
+filters:
+  model_keywords:
+    - escort
+    - "escort mk1"
+    - "escort mkI"
+    - "escort mk 1"
+  year_from: 1968
+  year_to: 1975
+  steering: lhd
+  # Hard price window in USD. Anything outside is rejected at save time and
+  # never reaches the DB or the email.
+  #   - Below the floor: almost always a part, an outlier "free for parts" car,
+  #     or a 1:18 scale model. $2K leaves headroom for the rare bargain.
+  #   - Above the ceiling: out of personal budget. Don't waste DB rows on it.
+  min_price_usd: 2000
+  max_price_usd: 35000
+  # Perceptual-hash Hamming distance threshold for cross-source dedupe.
+  phash_max_distance: 8
+  # Title tokens that conclusively identify a non-Mk1-car listing (parts, wrong variants,
+  # scale models). Single tokens are matched at word boundaries; multi-word phrases
+  # (e.g. "motor de") match as substrings of the ASCII-folded title.
+  reject_title_keywords:
+    # Variants — Mk2 through Mk5 in every spelling I've seen in titles.
+    # "mark i" is deliberately NOT in this list because Mk1 listings are
+    # legitimately titled "Mark I" / "Mark 1"; only the higher marks reject.
+    - mk2
+    - "mk 2"
+    - "mark 2"
+    - "mark ii"
+    - mk3
+    - "mk 3"
+    - "mark 3"
+    - "mark iii"
+    - mk4
+    - "mk 4"
+    - "mark 4"
+    - "mark iv"
+    - mk5
+    - "mk 5"
+    - "mark 5"
+    - "mark v"
+    - cosworth
+    - "rs turbo"
+    - xr3
+    - "xr 3"
+    - cabriolet
+    - cabrio
+    - orion
+    # Body type — only 2-door coupé / saloon wanted. Estate / wagon reject.
+    # "van" intentionally omitted (matches surnames "Van der …" too often);
+    # the $2K USD floor and existing part-keywords catch parts-only "Mk1 van"
+    # listings without that false-positive risk.
+    - estate
+    - wagon
+    # Scale models
+    - miniatura
+    - minature
+    - "1:43"
+    - "1/43"
+    - "1:18"
+    - "1/18"
+    # Parts (generic words)
+    - pecas
+    - pieces
+    - parts
+    - "motor de"
+    - grelha
+    - carrocaria
+    - aileron
+    - aleiron
+    - "lote "
+    - portas
+    - vidro
+    - "barra anti"
+    - "vendo diverso"
+      # 4-door body type — Mk1 search is 2-door only (per project requirement).
+    # "4dr"/"4door" match as single tokens; "4 door"/"4-door"/"four-door"
+    # match via the multi-word phrase path (hyphens are normalised to spaces).
+    - 4dr
+    - 4door
+    - "4 dr"
+    - "4 door"
+    - "four door"
+    - "4 portas"
+    - "4 puertas"
+    - "4 portes"
+    # Parts (specific components seen in live DB). Single-word tokens are
+    # word-bounded — be wary of any that overlap with legitimate body-type
+    # descriptions (e.g. "doors" appears in "two doors" / "2 doors" / "four
+    # doors", which describe the body, not parts). Prefer multi-word phrases.
+    - gearbox
+    - clocks
+    - bumper
+    - headlight
+    - "tail light"
+    - dashboard
+    - grille
+    - "fuel tank"
+    - axle
+    - "escort doors"
+    - "mk1 doors"
+    - "front door"
+    - "rear door"
+    - "escort seats"
+    - "mk1 seats"
+    - "escort wing"
+    - "mk1 wing"
+    - "escort wings"
+    - "mk1 wings"
+    - "escort bonnet"
+    - "mk1 bonnet"
+    - "escort hood"
+    - "mk1 hood"
+    - "escort dash"
+    - "mk1 dash"
+    - "para escort"
+    - "para mk1"
+
+# ─── Review UI (--serve-web) ──────────────────────────────────────────────────
+# Reasons that show up in the reject dropdown on the React review app.
+# Reordering, adding, or removing entries here is reflected live without a
+# code change (the API reads this list on each request).
+#
+# FUTURE: if the project ever needs to track unrelated categories (e.g. a
+# parallel hunt for RS2000 seats), add a `category` column to `listings`,
+# expose a category filter in the UI, and let scrapers tag each listing.
+# Don't refactor for that until it's actually needed.
+review:
+  reject_reasons:
+    - "4 door"
+    - "right hand drive"
+    - "rolling shell"
+    - "parts only"
+    - "wrong variant"
+    - "too far"
+    - "too expensive"
+    - "not interested"
+    - "duplicate"
+    - "no longer available"
+
+# ─── Sanity-check (--validate) ────────────────────────────────────────────────
+validate:
+  # Phrases that indicate a listing page is sold/removed. Single words match at
+  # word boundaries; multi-word phrases match as substrings. Bare "sold" is
+  # deliberately excluded — it matches too many incidental occurrences ("sold out",
+  # "items sold", FB login-wall promos, etc.).
+  sold_signals:
+    - "this listing is no longer available"
+    - "this listing no longer exists"
+    - "listing has been removed"
+    - "this item has been sold"
+    - "this car has been sold"
+    - "now sold"
+    - "sold subject to"
+    - "verkauft am"
+    - "reeds verkocht"
+    - vendu
+    - venduto
+    - vendido
+    - vendida
+    - "a venda"
+    - "em venda"
+    - reservado
+    - reservada
+  # Two-strike rule: only mark a listing 'sold' after this many consecutive
+  # validate runs see a sold signal. Resets when not seen.
+  sold_strike_threshold: 2
+
+# ─── Sites ────────────────────────────────────────────────────────────────────
+sites:
+  carandclassic:
+    enabled: true
+    make_id: 21           # Ford — confirmed via __NEXT_DATA__ quickFilters
+    request_delay_min: 2.0
+    request_delay_max: 5.0
+
+  classicdriver:
+    enabled: true
+    sort: newest
+    max_pages: 5
+
+  ebay:
+    enabled: true
+    marketplaces:
+      - EBAY_GB
+      - EBAY_DE
+      - EBAY_NL
+    category_id: "9801"
+    # app_id and cert_id — set via EBAY_APP_ID / EBAY_CERT_ID env vars
+    # Register at https://developer.ebay.com (free)
+
+  marktplaats:
+    enabled: true
+    category_id: 91       # Autos
+    # client_id / client_secret — set via MARKTPLAATS_CLIENT_ID / MARKTPLAATS_CLIENT_SECRET
+    # Falls back to HTML scraping if credentials are absent
+
+  autoscout24:
+    enabled: true
+    countries: "D,NL,B,F,GB"
+    max_pages: 10
+    playwright_timeout: 45000
+
+  facebook:
+    enabled: true
+    profile_dir: ".fb_profile"         # run `python run.py --fb-login` once to authenticate
+    search_radius_km: 500
+    locations:
+      - {name: "London",    lat: 51.5074, lng:  -0.1278}
+      - {name: "Amsterdam", lat: 52.3676, lng:   4.9041}
+      - {name: "Hamburg",   lat: 53.5753, lng:  10.0153}
+      - {name: "Brussels",  lat: 50.8503, lng:   4.3517}
+      - {name: "Paris",     lat: 48.8566, lng:   2.3522}
+      - {name: "Porto",     lat: 41.1579, lng:  -8.6291}
+      - {name: "Lisbon",    lat: 38.7169, lng:  -9.1395}
+      - {name: "Madrid",    lat: 40.4168, lng:  -3.7038}
+      - {name: "Barcelona", lat: 41.3851, lng:   2.1734}
+
+# ─── Notifications ────────────────────────────────────────────────────────────
+notification:
+  type: email   # only "email" is currently supported
+
+  email:
+    smtp_host: smtp.gmail.com
+    smtp_port: 587
+    smtp_user: ""         # override via SMTP_USER env var
+    smtp_pass: ""         # override via SMTP_PASS env var (use a Gmail App Password)
+    from_addr: ""         # defaults to smtp_user if blank
+    # Digest recipient list is populated from the DIGEST_RECIPIENTS env var
+    # at runtime (comma-separated). Keep personal addresses out of source
+    # control — the empty default here is intentional.
+    to_addrs: []
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+database:
+  path: listings.db
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+logging:
+  level: INFO
+  file: logs/escort_monitor.log
