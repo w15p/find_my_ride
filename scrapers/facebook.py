@@ -163,7 +163,7 @@ class FacebookScraper(BaseScraper):
                 or data.get("name")
                 or ""
             )
-            if not title or "escort" not in title.lower():
+            if not self.title_matches_search(title):
                 return None
 
             desc = data.get("description") or data.get("redacted_description", {}).get("text", "") or ""

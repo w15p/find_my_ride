@@ -122,7 +122,7 @@ class AutoScout24Scraper(BaseScraper):
             # so this scraper survives a back-and-forth UI change.
             title_el = card.query_selector("h2, h3")
             title = title_el.inner_text().strip() if title_el else ""
-            if not title or "escort" not in title.lower():
+            if not self.title_matches_search(title):
                 return None
 
             # Parse year from the card's full text — AutoScout24 shows "MM/YYYY"

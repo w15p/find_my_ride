@@ -178,7 +178,7 @@ class EbayScraper(BaseScraper):
             # the buyer sees the steering side). Central filter and reject
             # keywords still cull parts/wrong-variant/out-of-range listings.
             title_lower = title.lower()
-            if "escort" not in title_lower:
+            if not self.title_matches_search(title):
                 return None
 
             # Steering — populate "lhd" only when the title says so explicitly.

@@ -143,7 +143,7 @@ class CarAndClassicScraper(BaseScraper):
                 return None
 
             title = item.get("title") or ""
-            if "escort" not in title.lower():
+            if not self.title_matches_search(title):
                 return None
 
             year_raw = item.get("year")

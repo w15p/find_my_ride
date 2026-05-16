@@ -72,7 +72,7 @@ class ClassicDriverScraper(BaseScraper):
             title = title_el.get_text(strip=True) if title_el else ""
             if not title:
                 title = link_el.get_text(strip=True)
-            if not title or "escort" not in title.lower():
+            if not self.title_matches_search(title):
                 return None
 
             # Extract year from title (any 4-digit year)

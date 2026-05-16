@@ -87,7 +87,7 @@ class MarktplaatsScraper(BaseScraper):
     def _parse_api_ad(self, ad: dict) -> Optional[Listing]:
         try:
             title = ad.get("title", "")
-            if "escort" not in title.lower():
+            if not self.title_matches_search(title):
                 return None
             title_lower = title.lower()
             # LHD-in-title no longer required — RHD listings allowed through.
@@ -180,7 +180,7 @@ class MarktplaatsScraper(BaseScraper):
             if data.get("@type") not in ("Product", "Offer", "ItemPage", "Vehicle"):
                 return None
             name = data.get("name") or data.get("title") or ""
-            if "escort" not in name.lower():
+            if not self.title_matches_search(name):
                 return None
             steering = "lhd" if any(kw in name.lower() for kw in LHD_KEYWORDS) else "unknown"
             url = data.get("url") or data.get("@id") or ""
@@ -220,7 +220,7 @@ class MarktplaatsScraper(BaseScraper):
             url = urljoin(BASE_URL, href)
             title_el = card.select_one("h2, h3, .title, [class*='title']")
             title = title_el.get_text(strip=True) if title_el else link.get_text(strip=True)
-            if "escort" not in title.lower():
+            if not self.title_matches_search(title):
                 return None
             steering = "lhd" if any(kw in title.lower() for kw in LHD_KEYWORDS) else "unknown"
             price_el = card.select_one("[class*='price']")
