@@ -296,22 +296,54 @@ class ListingDB:
         ).fetchall()
 
     def set_user_reject(self, url: str, reason: Optional[str], rejected: bool = True) -> None:
+        # Shadow-write: legacy column UPDATE stays authoritative for reads;
+        # tenant_listing_state upsert is the forward-compatible target. Upsert
+        # (not UPDATE) because the structural backfill only created tls rows
+        # for listings with non-default state — a UPDATE would silently miss.
         if rejected:
+            ts = datetime.utcnow().isoformat()
             self.conn.execute(
                 "UPDATE listings SET user_rejected=1, user_reject_reason=?, user_rejected_at=? WHERE url=?",
-                (reason, datetime.utcnow().isoformat(), url),
+                (reason, ts, url),
+            )
+            self.conn.execute(
+                """INSERT INTO tenant_listing_state
+                       (tenant_id, listing_url, user_rejected, user_reject_reason, user_rejected_at)
+                   VALUES (?, ?, 1, ?, ?)
+                   ON CONFLICT (tenant_id, listing_url) DO UPDATE SET
+                       user_rejected      = 1,
+                       user_reject_reason = excluded.user_reject_reason,
+                       user_rejected_at   = excluded.user_rejected_at""",
+                (_DEFAULT_TENANT_ID, url, reason, ts),
             )
         else:
             self.conn.execute(
                 "UPDATE listings SET user_rejected=0, user_reject_reason=NULL, user_rejected_at=NULL WHERE url=?",
                 (url,),
             )
+            self.conn.execute(
+                """INSERT INTO tenant_listing_state
+                       (tenant_id, listing_url, user_rejected)
+                   VALUES (?, ?, 0)
+                   ON CONFLICT (tenant_id, listing_url) DO UPDATE SET
+                       user_rejected      = 0,
+                       user_reject_reason = NULL,
+                       user_rejected_at   = NULL""",
+                (_DEFAULT_TENANT_ID, url),
+            )
         self.conn.commit()
 
     def set_user_note(self, url: str, note: Optional[str]) -> None:
+        value = note if (note or "").strip() else None
         self.conn.execute(
             "UPDATE listings SET user_note=? WHERE url=?",
-            (note if (note or "").strip() else None, url),
+            (value, url),
+        )
+        self.conn.execute(
+            """INSERT INTO tenant_listing_state (tenant_id, listing_url, user_note)
+               VALUES (?, ?, ?)
+               ON CONFLICT (tenant_id, listing_url) DO UPDATE SET user_note = excluded.user_note""",
+            (_DEFAULT_TENANT_ID, url, value),
         )
         self.conn.commit()
 
@@ -330,18 +362,44 @@ class ListingDB:
         else:
             v = str(value).strip()
         self.conn.execute(f"UPDATE listings SET {field}=? WHERE url=?", (v, url))
+        # `field` is already allowlist-validated above, so the f-string is safe.
+        self.conn.execute(
+            f"""INSERT INTO tenant_listing_state (tenant_id, listing_url, {field})
+                VALUES (?, ?, ?)
+                ON CONFLICT (tenant_id, listing_url) DO UPDATE SET {field} = excluded.{field}""",
+            (_DEFAULT_TENANT_ID, url, v),
+        )
         self.conn.commit()
 
     def set_user_pin(self, url: str, pinned: bool) -> None:
         if pinned:
+            ts = datetime.utcnow().isoformat()
             self.conn.execute(
                 "UPDATE listings SET user_pinned=1, user_pinned_at=? WHERE url=?",
-                (datetime.utcnow().isoformat(), url),
+                (ts, url),
+            )
+            self.conn.execute(
+                """INSERT INTO tenant_listing_state
+                       (tenant_id, listing_url, user_pinned, user_pinned_at)
+                   VALUES (?, ?, 1, ?)
+                   ON CONFLICT (tenant_id, listing_url) DO UPDATE SET
+                       user_pinned    = 1,
+                       user_pinned_at = excluded.user_pinned_at""",
+                (_DEFAULT_TENANT_ID, url, ts),
             )
         else:
             self.conn.execute(
                 "UPDATE listings SET user_pinned=0, user_pinned_at=NULL WHERE url=?",
                 (url,),
+            )
+            self.conn.execute(
+                """INSERT INTO tenant_listing_state
+                       (tenant_id, listing_url, user_pinned)
+                   VALUES (?, ?, 0)
+                   ON CONFLICT (tenant_id, listing_url) DO UPDATE SET
+                       user_pinned    = 0,
+                       user_pinned_at = NULL""",
+                (_DEFAULT_TENANT_ID, url),
             )
         self.conn.commit()
 
