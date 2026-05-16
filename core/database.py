@@ -85,6 +85,64 @@ _DEFAULT_SEARCH_SLUG = "escort_mk1_lhd"
 _DEFAULT_SEARCH_LABEL = "Ford Escort Mk1 LHD"
 _DEFAULT_TENANT_ID = "default"
 
+# Columns on `listings` that are NOT user-state. Used by listings_select_sql()
+# below to build a deduplicated SELECT list when joining tenant_listing_state.
+_LISTING_COLS_NON_USER = (
+    "url", "site_name", "title", "price", "price_value", "price_currency",
+    "year", "location", "country_code", "image_url", "steering", "body_type",
+    "description", "image_phash", "fingerprint", "canonical_url",
+    "sold_signals_count", "scraped_at", "status", "sold_at",
+    "description_language", "description_translated",
+)
+# Per-tenant overrides — kept on both `listings` (legacy, write-through) and
+# `tenant_listing_state` (forward target). Reads COALESCE tls over legacy.
+_USER_STATE_COLS = (
+    "user_rejected", "user_reject_reason", "user_rejected_at",
+    "user_note", "user_pinned", "user_pinned_at",
+    "user_steering", "user_location", "user_year", "user_price_currency",
+)
+
+
+import re as _re
+_SAFE_TENANT_ID = _re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def _validate_tenant_id(tenant_id: str) -> str:
+    # tenant_id is interpolated into SQL string fragments below; restrict to
+    # a safe character set so a future dynamic caller can't break out.
+    if not _SAFE_TENANT_ID.match(tenant_id or ""):
+        raise ValueError(f"unsafe tenant_id: {tenant_id!r}")
+    return tenant_id
+
+
+def listings_select_sql(tenant_id: str = _DEFAULT_TENANT_ID) -> str:
+    """Return `SELECT … FROM listings l LEFT JOIN tenant_listing_state tls …`
+    suitable for use as the prefix of any listing query. User-state columns
+    appear once, COALESCE-aliased to their legacy names, so callers (and
+    `_row_to_dict` / `_row_to_listing`) see the effective value transparently.
+    """
+    tenant_id = _validate_tenant_id(tenant_id)
+    non_user = ", ".join(f"l.{c}" for c in _LISTING_COLS_NON_USER)
+    user = ", ".join(
+        f"COALESCE(tls.{c}, l.{c}) AS {c}" for c in _USER_STATE_COLS
+    )
+    return (
+        f"SELECT {non_user}, {user} "
+        f"FROM listings l "
+        f"LEFT JOIN tenant_listing_state tls "
+        f"ON tls.tenant_id = '{tenant_id}' AND tls.listing_url = l.url"
+    )
+
+
+def user_col_expr(col: str) -> str:
+    """Inline COALESCE expression for a user_* column, for WHERE/ORDER clauses.
+    Assumes the surrounding query aliases `listings` AS `l` and joins
+    `tenant_listing_state` AS `tls`.
+    """
+    if col not in _USER_STATE_COLS:
+        raise ValueError(f"not a user-state column: {col}")
+    return f"COALESCE(tls.{col}, l.{col})"
+
 _MIGRATIONS = [
     ("description",        "ALTER TABLE listings ADD COLUMN description TEXT"),
     ("image_phash",        "ALTER TABLE listings ADD COLUMN image_phash TEXT"),
@@ -286,12 +344,12 @@ class ListingDB:
     def canonical_listings_since(self, since: datetime) -> List[sqlite3.Row]:
         """Return canonical (non-duplicate), active, not-user-rejected listings."""
         return self.conn.execute(
-            """SELECT * FROM listings
-               WHERE scraped_at >= ?
-                 AND status = 'active'
-                 AND canonical_url IS NULL
-                 AND user_rejected = 0
-               ORDER BY scraped_at DESC""",
+            f"""{listings_select_sql()}
+                WHERE l.scraped_at >= ?
+                  AND l.status = 'active'
+                  AND l.canonical_url IS NULL
+                  AND {user_col_expr('user_rejected')} = 0
+                ORDER BY l.scraped_at DESC""",
             (since.isoformat(),),
         ).fetchall()
 

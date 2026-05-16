@@ -65,7 +65,7 @@ class OverrideBody(BaseModel):
 
 from core.countries import enhance_location
 from core.currency import format_price, usd_value
-from core.database import ListingDB
+from core.database import ListingDB, listings_select_sql, user_col_expr
 
 log = logging.getLogger(__name__)
 
@@ -176,22 +176,31 @@ def create_app() -> FastAPI:
         sort: str = "scraped_at_desc",
         limit: int = 500,
     ):
+        # `user_*` references in WHERE/ORDER use COALESCE(tls.*, l.*) so that
+        # writes to tenant_listing_state override the legacy column. The
+        # alias `tls` is bound by listings_select_sql() below.
+        u_rejected = user_col_expr("user_rejected")
+        u_year     = user_col_expr("user_year")
+        u_steering = user_col_expr("user_steering")
+        u_pinned   = user_col_expr("user_pinned")
+        u_pinnedat = user_col_expr("user_pinned_at")
+
         clauses = []
         params: list = []
         if status:
-            clauses.append("status = ?"); params.append(status)
+            clauses.append("l.status = ?"); params.append(status)
         if rejected == 0:
-            clauses.append("user_rejected = 0")
+            clauses.append(f"{u_rejected} = 0")
         elif rejected == 1:
-            clauses.append("user_rejected = 1")
+            clauses.append(f"{u_rejected} = 1")
         if canonical == 1:
-            clauses.append("canonical_url IS NULL")
+            clauses.append("l.canonical_url IS NULL")
         elif canonical == 0:
-            clauses.append("canonical_url IS NOT NULL")
+            clauses.append("l.canonical_url IS NOT NULL")
         if site:
-            clauses.append("site_name = ?"); params.append(site)
+            clauses.append("l.site_name = ?"); params.append(site)
         if q:
-            clauses.append("(LOWER(title) LIKE ? OR LOWER(description) LIKE ?)")
+            clauses.append("(LOWER(l.title) LIKE ? OR LOWER(l.description) LIKE ?)")
             qlike = f"%{q.lower()}%"
             params.extend([qlike, qlike])
         # Filter year and steering by the *effective* value (user override
@@ -199,30 +208,30 @@ def create_app() -> FastAPI:
         # year=NULL but the user has corrected to 1971 would still be filtered
         # out by `year_min`, which defeats the point of the override.
         if year_min is not None:
-            clauses.append("(COALESCE(user_year, year) IS NULL OR COALESCE(user_year, year) >= ?)")
+            clauses.append(f"(COALESCE({u_year}, l.year) IS NULL OR COALESCE({u_year}, l.year) >= ?)")
             params.append(year_min)
         if year_max is not None:
-            clauses.append("(COALESCE(user_year, year) IS NULL OR COALESCE(user_year, year) <= ?)")
+            clauses.append(f"(COALESCE({u_year}, l.year) IS NULL OR COALESCE({u_year}, l.year) <= ?)")
             params.append(year_max)
         if steering:
-            clauses.append("(COALESCE(user_steering, steering) = ? OR COALESCE(user_steering, steering) IS NULL)")
+            clauses.append(f"(COALESCE({u_steering}, l.steering) = ? OR COALESCE({u_steering}, l.steering) IS NULL)")
             params.append(steering)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         secondary = {
-            "scraped_at_desc": "scraped_at DESC",
-            "scraped_at_asc":  "scraped_at ASC",
-            "price_asc":       "price_value ASC NULLS LAST",
-            "price_desc":      "price_value DESC NULLS LAST",
-            "year_desc":       "year DESC NULLS LAST",
-        }.get(sort, "scraped_at DESC")
+            "scraped_at_desc": "l.scraped_at DESC",
+            "scraped_at_asc":  "l.scraped_at ASC",
+            "price_asc":       "l.price_value ASC NULLS LAST",
+            "price_desc":      "l.price_value DESC NULLS LAST",
+            "year_desc":       "l.year DESC NULLS LAST",
+        }.get(sort, "l.scraped_at DESC")
         # Pinned rows always float to the top; within the pinned band sort by
         # pin recency (most-recently-pinned first). The user's chosen sort
         # applies to the unpinned band below — and as a tiebreaker inside the
         # pinned band when two cards were pinned at the same instant.
-        order = f"user_pinned DESC, user_pinned_at DESC NULLS LAST, {secondary}"
+        order = f"{u_pinned} DESC, {u_pinnedat} DESC NULLS LAST, {secondary}"
 
         db = get_db()
-        sql = f"SELECT * FROM listings {where} ORDER BY {order} LIMIT ?"
+        sql = f"{listings_select_sql()} {where} ORDER BY {order} LIMIT ?"
         rows = db.conn.execute(sql, (*params, limit)).fetchall()
 
         # In-Python USD filter — keeps SQL portable without a Python-side function.
@@ -279,8 +288,16 @@ def create_app() -> FastAPI:
     @app.get("/api/stats")
     def stats():
         db = get_db()
+        u_rejected = user_col_expr("user_rejected")
         rows = db.conn.execute(
-            "SELECT site_name, status, user_rejected, COUNT(*) AS n FROM listings GROUP BY site_name, status, user_rejected"
+            f"""SELECT l.site_name AS site_name,
+                       l.status    AS status,
+                       {u_rejected} AS user_rejected,
+                       COUNT(*) AS n
+                FROM listings l
+                LEFT JOIN tenant_listing_state tls
+                       ON tls.tenant_id = 'default' AND tls.listing_url = l.url
+                GROUP BY l.site_name, l.status, {u_rejected}"""
         ).fetchall()
         out = {"active": 0, "sold": 0, "rejected": 0, "by_site": {}}
         for r in rows:
