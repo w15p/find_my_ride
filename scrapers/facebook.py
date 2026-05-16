@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from core.countries import country_from_display
 from core.http_client import USER_AGENTS
 from core.models import Listing
 from scrapers.base import BaseScraper
@@ -196,7 +197,7 @@ class FacebookScraper(BaseScraper):
             loc_obj = data.get("location") or {}
             display = loc_obj.get("display_name")
             city = loc_obj.get("city") or loc_obj.get("reverse_geocode", {}).get("city") or ""
-            country = loc_obj.get("country_code") or _country_from_display(display)
+            country = loc_obj.get("country_code") or country_from_display(display)
             location_str = display or (", ".join(filter(None, [city, (country or "").upper()])) or None)
 
             image_url = data.get("_image_url")
@@ -242,6 +243,34 @@ def _decode_json_string(s: Optional[str]) -> Optional[str]:
         return s
 
 
+def _find_title_for_item(script: str, item_id: Optional[str]) -> Optional[str]:
+    """Return the marketplace_listing_title belonging to `item_id` within `script`.
+
+    A FB detail page's Relay payload contains many listings (the target plus
+    related/recommended). Each lives in its own object with `"id":"<digits>"`
+    and `"marketplace_listing_title":"..."` fields. We pair each title with
+    the nearest numeric `"id"` occurrence in the script — in FB's compact JSON
+    that id is virtually always the parent object's id — and return the title
+    whose nearest id equals item_id. Returns None when no title can be
+    confidently attributed to item_id (caller should treat this as "skip").
+    """
+    title_matches = list(re.finditer(r'"marketplace_listing_title"\s*:\s*"([^"]+)"', script))
+    if not title_matches:
+        return None
+    if not item_id:
+        return _decode_json_string(title_matches[0].group(1))
+
+    id_matches = list(re.finditer(r'"id"\s*:\s*"(\d+)"', script))
+    if not id_matches:
+        return None
+
+    for tm in title_matches:
+        nearest = min(id_matches, key=lambda m: abs(m.start() - tm.start()))
+        if nearest.group(1) == item_id:
+            return _decode_json_string(tm.group(1))
+    return None
+
+
 def _id_window(script: str, item_id: Optional[str], radius: int = 4096) -> str:
     """Return a substring of `script` centred on the first occurrence of '"id":"<item_id>"'.
 
@@ -278,22 +307,32 @@ def _extract_relay_listing(html: str, item_id: Optional[str] = None) -> Optional
     if not candidate_scripts:
         return None
 
-    script = candidate_scripts[0]
-    listing_data: dict = {}
+    # Pick the script whose title we can confidently pin to the target item_id.
+    # FB embeds many listings on a single detail page (target + "related" +
+    # "more from seller"); the first script with `marketplace_listing_title` is
+    # often a related-listings blob, not the target. Find the title whose
+    # surrounding JSON object's `"id"` matches item_id, and use that script.
+    script = None
+    listing_title: Optional[str] = None
+    for candidate in candidate_scripts:
+        listing_title = _find_title_for_item(candidate, item_id)
+        if listing_title:
+            script = candidate
+            break
+    if script is None:
+        # No candidate definitively matched — fall back to first script + first
+        # title, but only when item_id is unknown. Bailing here when item_id is
+        # set is safer than reporting a wrong title.
+        if item_id:
+            return None
+        script = candidate_scripts[0]
+        first_title_m = re.search(r'"marketplace_listing_title"\s*:\s*"([^"]+)"', script)
+        if first_title_m:
+            listing_title = _decode_json_string(first_title_m.group(1))
 
-    # Title — anchor to item_id when available
-    if item_id:
-        title_m = re.search(
-            rf'"marketplace_listing_title"\s*:\s*"([^"]+)"[^{{}}]*"id"\s*:\s*"{item_id}"'
-            rf'|"id"\s*:\s*"{item_id}"[^{{}}]*"marketplace_listing_title"\s*:\s*"([^"]+)"',
-            script,
-        )
-        if title_m:
-            listing_data["marketplace_listing_title"] = _decode_json_string(title_m.group(1) or title_m.group(2))
-    if "marketplace_listing_title" not in listing_data:
-        title_m = re.search(r'"marketplace_listing_title"\s*:\s*"([^"]+)"', script)
-        if title_m:
-            listing_data["marketplace_listing_title"] = _decode_json_string(title_m.group(1))
+    listing_data: dict = {}
+    if listing_title:
+        listing_data["marketplace_listing_title"] = listing_title
 
     # Price — three independent searches in the window around the target item_id.
     # The fields don't have to be siblings inside the same brace pair, which
@@ -498,51 +537,6 @@ def _parse_price_string(raw: str) -> tuple[Optional[float], Optional[str]]:
 def _extract_item_id(url: str) -> Optional[str]:
     match = re.search(r"/marketplace/item/(\d+)", url)
     return match.group(1) if match else None
-
-
-# Country names that appear in FB's `city_page.display_name` for the European
-# markets we search. Used as a fallback when `country_alpha_two` is missing.
-# Keep narrow: only countries we'd plausibly scrape from. Extend as needed.
-_COUNTRY_NAME_TO_ISO = {
-    "portugal":     "PT",
-    "spain":        "ES",
-    "españa":       "ES",
-    "france":       "FR",
-    "germany":      "DE",
-    "deutschland":  "DE",
-    "italy":        "IT",
-    "italia":       "IT",
-    "netherlands":  "NL",
-    "nederland":    "NL",
-    "belgium":      "BE",
-    "belgië":       "BE",
-    "belgique":     "BE",
-    "united kingdom": "GB",
-    "uk":           "GB",
-    "england":      "GB",
-    "scotland":     "GB",
-    "wales":        "GB",
-    "ireland":      "IE",
-    "switzerland":  "CH",
-    "schweiz":      "CH",
-    "austria":      "AT",
-    "österreich":   "AT",
-    "denmark":      "DK",
-    "sweden":       "SE",
-    "norway":       "NO",
-    "finland":      "FI",
-    "poland":       "PL",
-    "czechia":      "CZ",
-    "czech republic": "CZ",
-}
-
-
-def _country_from_display(display: Optional[str]) -> Optional[str]:
-    """Try to recover an ISO country code from FB's `display_name`."""
-    if not display:
-        return None
-    last_segment = display.rsplit(",", 1)[-1].strip().lower()
-    return _COUNTRY_NAME_TO_ISO.get(last_segment)
 
 
 def _extract_any_year(text: Optional[str]) -> Optional[int]:

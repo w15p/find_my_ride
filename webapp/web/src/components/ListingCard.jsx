@@ -33,12 +33,56 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
   const usd = l.price_usd != null ? `$${l.price_usd.toLocaleString()}` : null;
   const effectiveSteering = (l.display_steering || "unknown");
   const drive = effectiveSteering.toUpperCase();
-  const steeringOverridden = !!l.user_steering;
+  // "Overridden" only fires when the user's value DIFFERS from the scraped
+  // one. If a scraper backfill later produces the same value the user had
+  // already entered (eBay's Drive Side aspect, etc.), the row stops showing
+  // the blue tint and ↶ — the override is preserved in the DB but the visual
+  // disagreement marker is silent.
+  const steeringOverridden = !!l.user_steering &&
+    (l.user_steering || "").toLowerCase() !== (l.steering || "").toLowerCase();
   const effectiveLocation = l.display_location || "";
-  const locationOverridden = !!l.user_location;
+  const locationOverridden = !!l.user_location && l.user_location !== l.location;
   const [locationDraft, setLocationDraft] = useState(effectiveLocation);
   const [locationSaved, setLocationSaved] = useState(false);
   useEffect(() => { setLocationDraft(effectiveLocation); }, [effectiveLocation]);
+
+  const effectiveYear = l.display_year ?? "";
+  const yearOverridden = l.user_year != null && l.user_year !== l.year;
+  const [yearDraft, setYearDraft] = useState(String(effectiveYear));
+  useEffect(() => { setYearDraft(String(effectiveYear)); }, [effectiveYear]);
+
+  const effectiveCurrency = (l.display_currency || "").toUpperCase();
+  const currencyOverridden = !!l.user_price_currency &&
+    (l.user_price_currency || "").toUpperCase() !== (l.price_currency || "").toUpperCase();
+
+  // Amber-for-RHD is a "needs your attention" cue. Once the user manually
+  // acknowledges the steering side, treat it as reviewed — no amber, even
+  // if the value is still RHD.
+  const userAcknowledgedSteering = !!l.user_steering;
+  const showAmberRhd = drive === "RHD" && !userAcknowledgedSteering;
+
+  const [descOpen, setDescOpen] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
+  useEffect(() => {
+    if (!descOpen) return;
+    const onKey = (e) => { if (e.key === "Escape") setDescOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [descOpen]);
+  useEffect(() => { setShowOriginal(false); }, [descOpen]);
+
+  // Card body and modal default to the English translation when present;
+  // the original is one click away. `_LANG_NAMES` is intentionally English-
+  // only — the UI is single-language for now.
+  const _LANG_NAMES = { pt: "Portuguese", es: "Spanish", fr: "French",
+                        de: "German", it: "Italian", nl: "Dutch",
+                        ca: "Catalan", id: "Indonesian", en: "English",
+                        gl: "Galician", ro: "Romanian" };
+  const langName = _LANG_NAMES[l.description_language] || l.description_language;
+  const hasTranslation = !!l.description_translated &&
+                         l.description_translated !== l.description;
+  const cardDescription = hasTranslation ? l.description_translated : l.description;
+  const modalPrimary = showOriginal || !hasTranslation ? l.description : l.description_translated;
 
   return (
     <article
@@ -100,13 +144,66 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
           </a>
         </div>
 
-        <div className="text-emerald-700 font-bold text-base">
-          {l.price || "POA"}
-          {usd && <span className="text-slate-500 font-normal text-xs ml-1">({usd})</span>}
+        <div className="text-emerald-700 font-bold text-base flex items-center gap-1 flex-wrap">
+          <span>{l.display_price || l.price || "POA"}</span>
+          {usd && <span className="text-slate-500 font-normal text-xs">({usd})</span>}
+          {effectiveCurrency && (
+            <>
+              <select
+                value={effectiveCurrency}
+                onChange={(e) => onOverride(l.url, { price_currency: e.target.value })}
+                title={currencyOverridden ? "Currency overridden — click ↶ to restore" : "Wrong currency? Pick the correct one"}
+                className={`text-[11px] border rounded px-1 font-normal cursor-pointer ${
+                  currencyOverridden ? "border-blue-400 bg-blue-50 text-slate-700" : "border-transparent text-slate-400 hover:border-slate-300 hover:text-slate-600"
+                }`}
+              >
+                <option value="EUR">EUR €</option>
+                <option value="GBP">GBP £</option>
+                <option value="USD">USD $</option>
+              </select>
+              {currencyOverridden && (
+                <button
+                  onClick={() => onOverride(l.url, { price_currency: "" })}
+                  title="Clear override (restore scraped currency)"
+                  className="text-[10px] text-slate-400 hover:text-slate-700"
+                >
+                  ↶
+                </button>
+              )}
+            </>
+          )}
         </div>
 
         <div className="text-xs text-slate-600 flex flex-wrap gap-x-3 gap-y-1 items-center">
-          <span>Year: {l.year || "?"}</span>
+          <label className="flex items-center gap-1">
+            <span>Year:</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={yearDraft}
+              placeholder="?"
+              onChange={(e) => setYearDraft(e.target.value)}
+              onBlur={() => {
+                if (yearDraft === String(effectiveYear || "")) return;
+                onOverride(l.url, { year: yearDraft }).catch(() => {
+                  setYearDraft(String(effectiveYear || ""));
+                });
+              }}
+              title={yearOverridden ? "User-overridden" : "Auto-detected"}
+              className={`w-14 text-xs border rounded px-1 py-0.5 ${
+                yearOverridden ? "border-blue-400 bg-blue-50" : "border-slate-200"
+              }`}
+            />
+            {yearOverridden && (
+              <button
+                onClick={() => onOverride(l.url, { year: "" })}
+                title="Clear override (restore auto-detected value)"
+                className="text-[10px] text-slate-400 hover:text-slate-700"
+              >
+                ↶
+              </button>
+            )}
+          </label>
           <label className="flex items-center gap-1">
             <span>Drive:</span>
             <select
@@ -115,7 +212,7 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
               title={steeringOverridden ? "User-overridden" : "Auto-detected"}
               className={`text-xs border rounded px-1 py-0.5 ${
                 steeringOverridden ? "border-blue-400 bg-blue-50" : "border-slate-200"
-              } ${drive === "RHD" ? "text-amber-700" : ""}`}
+              } ${showAmberRhd ? "text-amber-700" : ""}`}
             >
               <option value="lhd">LHD</option>
               <option value="rhd">RHD</option>
@@ -164,7 +261,68 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
         </label>
 
         {l.description && (
-          <p className="text-sm text-slate-700 line-clamp-3">{l.description}</p>
+          <p
+            className="text-sm text-slate-700 line-clamp-3 cursor-pointer hover:text-slate-900"
+            onClick={() => setDescOpen(true)}
+            title={hasTranslation
+              ? `Click to read full description (translated from ${langName})`
+              : "Click to read full description"}
+          >
+            {cardDescription}
+            {hasTranslation && (
+              <span className="ml-1 text-[10px] text-slate-400">[{langName} → EN]</span>
+            )}
+          </p>
+        )}
+        {descOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            onClick={() => setDescOpen(false)}
+          >
+            <div
+              className="bg-white rounded-lg max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-4 py-3 border-b border-slate-200 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <a
+                    href={l.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-semibold text-slate-800 hover:underline block truncate"
+                  >
+                    {l.title}
+                  </a>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    {l.site_name} · {l.price || "POA"} · {effectiveYear || "?"} · {effectiveLocation || "?"}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setDescOpen(false)}
+                  aria-label="Close"
+                  className="text-slate-400 hover:text-slate-700 text-2xl leading-none px-1"
+                >
+                  ×
+                </button>
+              </div>
+              {hasTranslation && (
+                <div className="px-4 pt-2 text-xs text-slate-500 flex items-center gap-2">
+                  <span>
+                    {showOriginal ? `Original (${langName})` : `Translated from ${langName}`}
+                  </span>
+                  <button
+                    onClick={() => setShowOriginal(!showOriginal)}
+                    className="text-blue-600 hover:underline"
+                  >
+                    {showOriginal ? "Show English" : "Show original"}
+                  </button>
+                </div>
+              )}
+              <div className="px-4 py-3 overflow-y-auto whitespace-pre-wrap text-sm text-slate-800">
+                {modalPrimary}
+              </div>
+            </div>
+          </div>
         )}
 
         {l.also_on && l.also_on.length > 0 && (

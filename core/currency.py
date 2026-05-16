@@ -61,3 +61,19 @@ def to_usd_str(price_value: Optional[int], currency: Optional[str]) -> Optional[
     if v is None:
         return None
     return f"${v:,.0f}"
+
+
+_CURRENCY_SYMBOLS = {"EUR": "€", "GBP": "£", "USD": "$"}
+
+
+def format_price(price_value: Optional[int], currency: Optional[str]) -> Optional[str]:
+    """Render minor-units + ISO code as a symbol-prefixed display string.
+
+    `format_price(2195000, 'GBP')` → `'£21,950'`. Returns None when either
+    input is missing; callers should fall back to whatever the scraper
+    originally stored as raw text in that case.
+    """
+    if price_value is None or not currency:
+        return None
+    symbol = _CURRENCY_SYMBOLS.get(currency, currency)
+    return f"{symbol}{price_value / 100:,.0f}"

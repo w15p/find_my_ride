@@ -34,7 +34,8 @@ import requests
 import yaml
 from dotenv import load_dotenv
 
-from core.currency import rates_available, usd_value
+from core.countries import enhance_location
+from core.currency import format_price, rates_available, usd_value
 from core.database import ListingDB
 from core.http_client import make_session, polite_get
 from core.models import Listing
@@ -353,12 +354,23 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
         log.info("  %d new (URL-unseen)", len(new))
 
         # Compute phash + fingerprint, then look for cross-source duplicates.
+        # Also detect language and translate non-English descriptions so the
+        # review-app card and digest can render English by default.
+        # And fill country_code via Nominatim when the scraper missed it.
+        from core.geocode import lookup_country
+        from core.translate import detect_and_translate
         for l in new:
             l.image_phash = _compute_phash(l.image_url)
             l.fingerprint = _compute_fingerprint(l)
             l.canonical_url = _find_canonical(l, db, cfg)
             if l.canonical_url:
                 log.info("  Duplicate: %s → canonical %s", l.url, l.canonical_url)
+            if l.description:
+                l.description_language, l.description_translated = detect_and_translate(l.description)
+            if l.location and not l.country_code:
+                iso = lookup_country(l.location)
+                if iso:
+                    l.country_code = iso
 
         if not args.check_only:
             db.save(new)
@@ -514,20 +526,33 @@ def cmd_list_db(db: ListingDB) -> None:
 
 
 def _row_to_listing(r) -> Listing:
+    # Honour user overrides when building a Listing for the digest, so the
+    # email displays the corrected currency (and the USD conversion uses the
+    # corrected ISO code). Year/location/steering overrides flow through the
+    # same way.
+    keys = r.keys()
+    eff_currency = (r["user_price_currency"] if "user_price_currency" in keys else None) or r["price_currency"]
+    eff_price_str = format_price(r["price_value"], eff_currency) or r["price"]
+    eff_year = (r["user_year"] if "user_year" in keys else None) or r["year"]
+    eff_loc = (
+        (r["user_location"] if "user_location" in keys else None)
+        or enhance_location(r["location"], r["country_code"] if "country_code" in keys else None)
+    )
+    eff_steering = (r["user_steering"] if "user_steering" in keys else None) or r["steering"]
     return Listing(
         url=r["url"],
         site_name=r["site_name"],
         title=r["title"] or "",
-        price=r["price"],
+        price=eff_price_str,
         price_value=r["price_value"],
-        price_currency=r["price_currency"],
-        year=r["year"],
-        location=r["location"],
+        price_currency=eff_currency,
+        year=eff_year,
+        location=eff_loc,
         country_code=r["country_code"],
         image_url=r["image_url"],
-        steering=r["steering"],
+        steering=eff_steering,
         body_type=r["body_type"],
-        description=r["description"] if "description" in r.keys() else None,
+        description=r["description"] if "description" in keys else None,
         status=r["status"],
     )
 

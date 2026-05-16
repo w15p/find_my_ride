@@ -68,6 +68,52 @@ class EbayScraper(BaseScraper):
         self.log.info("Total eBay listings found: %d", len(results))
         return results
 
+    def _enrich_from_detail(self, listing: Listing, token: str, marketplace: str) -> None:
+        """Pull structured aspects from the eBay item-detail endpoint.
+
+        The search endpoint omits the `localizedAspects` block, but the detail
+        endpoint returns Year, Drive Side, Body Type, Mileage, etc. as clean
+        strings. We call it once per candidate that survived the search-side
+        filter so a missing year-in-title doesn't strand the row at year=None.
+        Year and Drive Side overwrite scraped values; description is filled
+        only when our previous extraction was empty.
+        """
+        m = re.search(r"/itm/(\d+)", listing.url) or re.search(r"item/v1\|(\d+)", listing.url)
+        if not m:
+            return
+        item_id = f"v1|{m.group(1)}|0"
+        try:
+            resp = self.http.get(
+                f"https://api.ebay.com/buy/browse/v1/item/{item_id}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-EBAY-C-MARKETPLACE-ID": marketplace,
+                },
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                return
+            data = resp.json()
+        except Exception as exc:
+            self.log.debug("eBay enrich failed for %s: %s", listing.url, exc)
+            return
+        aspects = {a.get("name"): a.get("value") for a in (data.get("localizedAspects") or [])}
+        if listing.year is None:
+            try:
+                listing.year = int(aspects.get("Year") or 0) or None
+            except (ValueError, TypeError):
+                pass
+        drive = (aspects.get("Drive Side") or "").lower()
+        if "right" in drive:
+            listing.steering = "rhd"
+        elif "left" in drive:
+            listing.steering = "lhd"
+        if not listing.description:
+            short = data.get("shortDescription") or ""
+            short = " ".join(short.split())
+            if short:
+                listing.description = short[:1000]
+
     def _search_marketplace(
         self, token: str, marketplace: str, category_id: str
     ) -> List[Listing]:
@@ -76,16 +122,24 @@ class EbayScraper(BaseScraper):
             "X-EBAY-C-MARKETPLACE-ID": marketplace,
             "Content-Type": "application/json",
         }
+        # No `lhd` in the query — UK sellers don't add it (RHD is the default
+        # there), and DE/NL sellers don't either (LHD is the default for them).
+        # No `category_ids` — eBay's category tree differs per marketplace
+        # (UK 9801 ≠ DE 9805 etc.), so a single ID throws away most of what
+        # we want. Volume gets large on DE/NL (~10k+ each, mostly parts) but
+        # the central reject-keywords + $2K USD floor in `_should_keep` cull
+        # everything that isn't a real car.
         params = {
-            "q": "ford escort mk1 lhd",
-            "category_ids": category_id,
+            "q": "ford escort mk1",
             "sort": "newlyListed",
             "limit": "200",
         }
+        max_pages = int(self.config.get("max_pages", 5))
         listings: List[Listing] = []
         offset = 0
+        page = 0
 
-        while True:
+        while page < max_pages:
             params["offset"] = str(offset)
             try:
                 resp = self.http.get(SEARCH_URL, headers=headers, params=params, timeout=20)
@@ -102,12 +156,16 @@ class EbayScraper(BaseScraper):
             for item in items:
                 listing = self._parse_item(item, marketplace)
                 if listing:
+                    self._enrich_from_detail(listing, token, marketplace)
                     listings.append(listing)
 
             total = data.get("total", 0)
             offset += len(items)
+            page += 1
             if offset >= total or not items:
                 break
+        else:
+            self.log.info("eBay %s: hit max_pages=%d cap at offset=%d/%d", marketplace, max_pages, offset, total)
 
         return listings
 
@@ -153,8 +211,17 @@ class EbayScraper(BaseScraper):
             city = loc.get("city", "")
             location_str = ", ".join(filter(None, [city, country])) or None
 
-            image = item.get("image") or {}
-            image_url = image.get("imageUrl")
+            # eBay names these backwards: `image.imageUrl` is a 225px thumbnail,
+            # `thumbnailImages[0].imageUrl` is the 1600px hero. Prefer the hero;
+            # fall back to the thumbnail; as last resort, derive from the
+            # listing URL's `:g:<hash>` suffix which encodes the same image ID.
+            thumbs = item.get("thumbnailImages") or []
+            image_url = (thumbs[0].get("imageUrl") if thumbs else None) \
+                        or (item.get("image") or {}).get("imageUrl")
+            if not image_url:
+                m = re.search(r":g:([A-Za-z0-9]+)", url or "")
+                if m:
+                    image_url = f"https://i.ebayimg.com/images/g/{m.group(1)}/s-l1600.jpg"
 
             description_raw = item.get("shortDescription") or ""
             description = re.sub(r"\s+", " ", description_raw).strip()[:1000] or None

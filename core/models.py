@@ -20,6 +20,8 @@ class Listing:
     steering: Optional[str] = None          # "lhd" | "rhd" | "unknown"
     body_type: Optional[str] = None         # "2-door", "saloon", etc. — best-effort
     description: Optional[str] = None       # Seller-written body text or synthetic summary
+    description_language: Optional[str] = None   # ISO 639-1 detected from description
+    description_translated: Optional[str] = None # English translation when source is not English
     image_phash: Optional[str] = None       # 16-char hex perceptual hash for cross-source dedupe
     fingerprint: Optional[str] = None       # sha1 of normalised dedupe key
     canonical_url: Optional[str] = None     # If duplicate, points at canonical row's URL; NULL = canonical

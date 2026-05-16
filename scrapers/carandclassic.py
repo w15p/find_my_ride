@@ -5,6 +5,8 @@ import json
 import re
 from typing import List, Optional
 
+from bs4 import BeautifulSoup
+
 from core.http_client import polite_get
 from core.models import Listing
 from scrapers.base import BaseScraper
@@ -74,8 +76,59 @@ class CarAndClassicScraper(BaseScraper):
                 break
             page += 1
 
+        # Enrich each result with the seller's free-text description from
+        # the detail page. Cheap — typical scrape has 3-15 candidate listings.
+        # The synthetic spec line ("73,650 km • 1100 • petrol...") stays as
+        # the leading summary; seller's prose appends underneath.
+        for listing in results:
+            detail = self._fetch_description(listing.url, title=listing.title)
+            if detail:
+                if listing.description:
+                    combined = f"{listing.description}\n\n{detail}"
+                    listing.description = combined[:1000]
+                else:
+                    listing.description = detail[:1000]
+
         self.log.info("Car & Classic total listings: %d", len(results))
         return results
+
+    def _fetch_description(self, url: str, title: Optional[str] = None) -> Optional[str]:
+        """Return the seller's free-text description from a C&C detail page.
+
+        Premium (/l/) and basics (/la/) listings both embed it at
+        `props.listing.description` in the Inertia JSON. Basics ships HTML
+        (`<br/>` and friends) and additionally masks the model name with
+        asterisks (e.g. "Ford ****** MK1") — anti-scrape on the free tier.
+        We strip HTML and substitute the mask with the model word extracted
+        from the title (every word that's not Ford, year, Mark, etc.).
+        """
+        try:
+            resp = polite_get(
+                self.http, url,
+                min_delay=self.config.get("request_delay_min", 1.0),
+                max_delay=self.config.get("request_delay_max", 2.0),
+            )
+        except Exception as exc:
+            self.log.debug("C&C detail fetch failed: %s — %s", url, exc)
+            return None
+        m = INERTIA_RE.search(resp.text)
+        if not m:
+            return None
+        try:
+            data = json.loads(html_module.unescape(m.group(1)))
+        except json.JSONDecodeError:
+            return None
+        raw = (data.get("props") or {}).get("listing", {}).get("description")
+        if not raw:
+            return None
+        text = BeautifulSoup(raw, "lxml").get_text(" ", strip=True) if "<" in raw else raw
+        text = re.sub(r"\s+", " ", text).strip()
+        # Unmask the model name. Basics tier replaces it with 3+ asterisks.
+        if "***" in text and title:
+            model = _model_word_from_title(title)
+            if model:
+                text = re.sub(r"\*{3,}", model, text)
+        return text[:1000] or None
 
     def _parse_item(self, item: dict) -> Optional[Listing]:
         try:
@@ -146,6 +199,32 @@ class CarAndClassicScraper(BaseScraper):
         except Exception as exc:
             self.log.debug("Failed to parse item: %s — %s", item.get("title"), exc)
             return None
+
+
+_TITLE_STOPWORDS = {
+    "ford", "mark", "mk", "mk1", "mki", "mk2", "mk3", "mk4", "mk5",
+    "rs", "gt", "lhd", "rhd", "the", "a", "an", "of",
+    "mexico", "twin", "cam", "cosworth", "rs1600", "rs2000",
+    "spec", "for", "sale",
+}
+
+
+def _model_word_from_title(title: str) -> Optional[str]:
+    """Pull the distinctive model word from a C&C listing title.
+
+    Used to unmask the `******` placeholder C&C inserts into basics-tier
+    descriptions. The title is plain — e.g. `1970 Ford Escort Mexico Mark 1`.
+    Strip year, make, trim/variant words; keep the first remaining word
+    (the model name). Casing preserved so we don't slap `escort` into prose
+    that capitalised it.
+    """
+    if not title:
+        return None
+    for raw in re.findall(r"[A-Za-z]+", title):
+        if raw.lower() in _TITLE_STOPWORDS:
+            continue
+        return raw
+    return None
 
 
 def _build_synthetic_description(attrs: dict, loc: dict) -> Optional[str]:

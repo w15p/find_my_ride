@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.carandclassic.com)",
+      "WebFetch(domain:www.autoscout24.com)",
+      "WebFetch(domain:www.classicdriver.com)",
+      "WebFetch(domain:www.marktplaats.nl)",
+      "WebFetch(domain:www.ebay.co.uk)",
+      "WebSearch",
+      "WebFetch(domain:scrapfly.io)",
+      "WebFetch(domain:api.marktplaats.nl)",
+      "WebFetch(domain:developer.ebay.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python -c \":*)",
+      "Bash(python3 -c \":*)",
+      "Bash(python3 -m venv .venv)",
+      "Bash(.venv/bin/pip install:*)",
+      "Bash(.venv/bin/python3 -c \":*)",
+      "Bash(.venv/bin/python3 run.py --help)",
+      "Read(//opt/homebrew/Cellar/python@3.13/3.13.4/Frameworks/Python.framework/Versions/3.13/bin/**)",
+      "Bash(.venv/bin/python3 run.py --check-only --sites carandclassic)",
+      "Bash(.venv/bin/playwright install:*)",
+      "Bash(.venv/bin/python3 run.py --fb-login)",
+      "Bash(chmod +x /Users/joshua/dev/escort_mk1/cron_run.sh)",
+      "Bash(.venv/bin/python3 run.py)",
+      "Bash(.venv/bin/python3 run.py --send-digest)",
+      "Bash(.venv/bin/python3 run.py --sites carandclassic classicdriver autoscout24)",
+      "Bash(.venv/bin/python3 run.py --sites facebook)",
+      "Bash(.venv/bin/python run.py --fb-login)",
+      "Bash(.venv/bin/python run.py --sites facebook --check-only)",
+      "Bash(while ! grep -q \"Facebook total listings\\\\|new listing\\(s\\) found\\\\|No new listings\" /private/tmp/claude-501/-Users-joshua-dev-escort-mk1/cbf061fa-0097-4413-9b6e-183234b1ae3a/tasks/b9q337wip.output)",
+      "Bash(do sleep:*)",
+      "Bash(done)",
+      "Bash(.venv/bin/python -:*)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
+    ]
+  }
+}

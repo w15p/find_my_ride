@@ -54,8 +54,17 @@ class OverrideBody(BaseModel):
     url: str
     steering: Optional[str] = None  # "lhd" | "rhd" | "unknown" | "" (clear)
     location: Optional[str] = None  # free text; "" clears the override
+    # Year is accepted as a string so the frontend can send "1971" or "" (clear)
+    # without int-coercion gymnastics.
+    year: Optional[str] = None
+    # ISO 4217 currency override — "EUR" / "GBP" / "USD" / "" (clear).
+    # Amount stays as scraped; only the symbol + USD conversion change.
+    price_currency: Optional[str] = None
 
-from core.currency import usd_value
+
+
+from core.countries import enhance_location
+from core.currency import format_price, usd_value
 from core.database import ListingDB
 
 log = logging.getLogger(__name__)
@@ -74,10 +83,12 @@ _IMAGE_HOST_RULES = {
     # going through the proxy uniformly is simpler for the frontend.
     "prod.pictures.autoscout24.net": {"referer": ""},
     "www.classicdriver.com": {"referer": ""},
+    "i.ebayimg.com": {"referer": ""},
 }
 _IMAGE_HOST_SUFFIXES = (
     ".fbcdn.net",          # FB scontent-*.xx.fbcdn.net
     ".carandclassic.com",  # safety net for any C&C subdomain
+    ".ebayimg.com",        # safety net for any eBay image subdomain
 )
 
 
@@ -105,13 +116,26 @@ def _load_cfg() -> dict:
 
 def _row_to_dict(r) -> dict:
     d = dict(r)
-    usd = usd_value(d.get("price_value"), d.get("price_currency"))
-    d["price_usd"] = round(usd, 0) if usd is not None else None
-    # Effective display values fall back to scraped if the user hasn't overridden.
-    # Frontend renders these; the original columns stay visible for "is this
-    # a manual override?" indication on the UI.
+    # Effective values: user override falls back to scraped value.
     d["display_steering"] = d.get("user_steering") or d.get("steering")
-    d["display_location"] = d.get("user_location") or d.get("location")
+    # User override wins outright; otherwise enrich the scraped location with
+    # the country name when it's missing or only the ISO code is present.
+    if d.get("user_location"):
+        d["display_location"] = d["user_location"]
+    else:
+        d["display_location"] = enhance_location(d.get("location"), d.get("country_code"))
+    d["display_year"] = d.get("user_year") if d.get("user_year") is not None else d.get("year")
+    d["display_currency"] = d.get("user_price_currency") or d.get("price_currency")
+    # USD conversion uses the *effective* currency so an EUR-corrected listing's
+    # $ amount is recomputed at EUR→USD instead of being treated as already USD.
+    usd = usd_value(d.get("price_value"), d.get("display_currency"))
+    d["price_usd"] = round(usd, 0) if usd is not None else None
+    # Always derive the displayed price from `price_value` + effective
+    # currency so the symbol is consistent across sites (otherwise eBay
+    # leaks its `"GBP 21950.00"` ISO-prefixed string into the UI while
+    # every other scraper renders `£21,950`). Fall back to the scraper's
+    # raw string only when we don't have structured values.
+    d["display_price"] = format_price(d.get("price_value"), d.get("display_currency")) or d.get("price")
     return d
 
 
@@ -170,12 +194,19 @@ def create_app() -> FastAPI:
             clauses.append("(LOWER(title) LIKE ? OR LOWER(description) LIKE ?)")
             qlike = f"%{q.lower()}%"
             params.extend([qlike, qlike])
+        # Filter year and steering by the *effective* value (user override
+        # falls back to the scraped value). Otherwise a row whose scraped
+        # year=NULL but the user has corrected to 1971 would still be filtered
+        # out by `year_min`, which defeats the point of the override.
         if year_min is not None:
-            clauses.append("(year IS NULL OR year >= ?)"); params.append(year_min)
+            clauses.append("(COALESCE(user_year, year) IS NULL OR COALESCE(user_year, year) >= ?)")
+            params.append(year_min)
         if year_max is not None:
-            clauses.append("(year IS NULL OR year <= ?)"); params.append(year_max)
+            clauses.append("(COALESCE(user_year, year) IS NULL OR COALESCE(user_year, year) <= ?)")
+            params.append(year_max)
         if steering:
-            clauses.append("(steering = ? OR steering IS NULL)"); params.append(steering)
+            clauses.append("(COALESCE(user_steering, steering) = ? OR COALESCE(user_steering, steering) IS NULL)")
+            params.append(steering)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         secondary = {
             "scraped_at_desc": "scraped_at DESC",
@@ -315,6 +346,24 @@ def create_app() -> FastAPI:
             db.set_user_field(body.url, "user_steering", body.steering.lower())
         if body.location is not None:
             db.set_user_field(body.url, "user_location", body.location)
+        if body.year is not None:
+            raw = body.year.strip()
+            if not raw:
+                db.set_user_field(body.url, "user_year", None)
+            else:
+                try:
+                    yr = int(raw)
+                except ValueError:
+                    raise HTTPException(400, f"year must be an integer or empty string, got {body.year!r}")
+                if not (1900 <= yr <= 2030):
+                    raise HTTPException(400, f"year out of plausible range (1900–2030): {yr}")
+                db.set_user_field(body.url, "user_year", yr)
+        if body.price_currency is not None:
+            allowed = {"", "EUR", "GBP", "USD"}
+            ccy = body.price_currency.strip().upper()
+            if ccy not in allowed:
+                raise HTTPException(400, f"price_currency must be one of {sorted(allowed)}")
+            db.set_user_field(body.url, "user_price_currency", ccy)
         return {"ok": True}
 
     # ── Static file serving for the built React app ──────────────────────────
