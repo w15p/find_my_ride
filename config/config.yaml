@@ -121,15 +121,75 @@ filters:
     - "para escort"
     - "para mk1"
 
+# ─── Saved searches ──────────────────────────────────────────────────────────
+# Each key under `searches:` corresponds to a row in the `searches` table
+# (matched by slug). The slug is the dictionary key.
+#
+# Per-search keys:
+#   label              — human display name, surfaced in UI + email subject
+#   query              — search-engine query string each scraper substitutes
+#                        into its URL (where it uses a `?q=` parameter)
+#   required_keywords  — title-filter signals; a listing keeps if its title
+#                        contains ANY one of these (case-insensitive substring)
+#   sites              — which scrapers participate in this search; sites
+#                        absent from the list are skipped on its scrape pass
+#   filters            — per-search save-time filters. Empty / absent means
+#                        no constraint. Falls back to top-level `filters:` for
+#                        the cars hunt during Commit 1 (the top-level block
+#                        moves into here in Commit 2).
+#
+# The top-level `filters:` block above is still the source of truth for the
+# cars hunt's filters until the per-search filter migration lands. Don't
+# duplicate values between the two until then or they'll drift.
+searches:
+  escort_mk1_lhd:
+    label: "Ford Escort Mk1 LHD"
+    query: "ford escort mk1"
+    required_keywords:
+      - escort
+    sites:
+      - autoscout24
+      - carandclassic
+      - classicdriver
+      - ebay
+      - marktplaats
+      - facebook
+    # filters: — read from top-level `filters:` above (Commit 1 back-compat)
+
+  rs2000_mexico_seats:
+    label: "RS2000 / Mexico Seats"
+    # Broad enough to catch listings titled "Pair of RS2000 front seats",
+    # "Escort Mexico seats Mk1", "MK2 Mexico interior", etc. Each scraper
+    # URL-encodes this before substitution into its ?q= parameter.
+    query: "ford escort rs2000 mexico seats"
+    # OR semantics — any one keyword match passes the title filter.
+    required_keywords:
+      - seats
+      - rs2000
+      - mexico
+    # autoscout24 + classicdriver use URL paths (/lst/ford/escort), are
+    # cars-only sites, and would surface no parts even if queried — skip.
+    sites:
+      - carandclassic
+      - ebay
+      - marktplaats
+      - facebook
+    filters:
+      # Cheap enough to exclude obvious junk listings / scams, low enough to
+      # catch real bargains. Tune after the first scrape.
+      min_price_usd: 50
+      # No ceiling — even a £2K refurbished pair is plausible if NOS.
+      max_price_usd: null
+      # Seats don't have meaningful years; skip the cars-style year window.
+      year_from: null
+      year_to: null
+      # Start empty; add specific rejects after seeing first-scrape noise.
+      reject_title_keywords: []
+
 # ─── Review UI (--serve-web) ──────────────────────────────────────────────────
 # Reasons that show up in the reject dropdown on the React review app.
 # Reordering, adding, or removing entries here is reflected live without a
 # code change (the API reads this list on each request).
-#
-# FUTURE: if the project ever needs to track unrelated categories (e.g. a
-# parallel hunt for RS2000 seats), add a `category` column to `listings`,
-# expose a category filter in the UI, and let scrapers tag each listing.
-# Don't refactor for that until it's actually needed.
 review:
   reject_reasons:
     - "4 door"

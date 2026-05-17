@@ -81,9 +81,16 @@ CREATE TABLE IF NOT EXISTS tenant_listing_state (
 """
 
 _STRUCTURAL_MIGRATION_ID = "001_search_split"
+_SEATS_SEARCH_MIGRATION_ID = "002_seats_search"
 _DEFAULT_SEARCH_SLUG = "escort_mk1_lhd"
 _DEFAULT_SEARCH_LABEL = "Ford Escort Mk1 LHD"
 _DEFAULT_TENANT_ID = "default"
+
+# Second saved search — RS2000 / Mexico seats hunt. Slug used by run.py and the
+# webapp to address this search; label is what the UI/email shows. Per-search
+# config (query, required_keywords, sites, filters) lives in config/config.yaml.
+_SEATS_SEARCH_SLUG = "rs2000_mexico_seats"
+_SEATS_SEARCH_LABEL = "RS2000 / Mexico Seats"
 
 # Columns on `listings` that are NOT user-state. Used by listings_select_sql()
 # below to build a deduplicated SELECT list when joining tenant_listing_state.
@@ -202,6 +209,9 @@ class ListingDB:
             (_STRUCTURAL_MIGRATION_ID,),
         ).fetchone()
         if already:
+            # 001 already done — fall through to later migrations rather than
+            # short-circuiting. Each subsequent migration owns its own gate.
+            self._migrate_seats_search()
             return
 
         now = datetime.utcnow().isoformat()
@@ -248,6 +258,39 @@ class ListingDB:
             self.conn.execute(
                 "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
                 (_STRUCTURAL_MIGRATION_ID, now),
+            )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
+        self._migrate_seats_search()
+
+    def _migrate_seats_search(self) -> None:
+        """Seed the `searches` row for the RS2000 / Mexico seats hunt.
+
+        Idempotent and gated on `schema_migrations`. Independent of the
+        `001_search_split` gate so that even on a DB where 001 already ran
+        (every existing install), this second seed still gets applied on
+        next startup.
+        """
+        already = self.conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE id = ?",
+            (_SEATS_SEARCH_MIGRATION_ID,),
+        ).fetchone()
+        if already:
+            return
+
+        now = datetime.utcnow().isoformat()
+        self.conn.execute("BEGIN")
+        try:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO searches (slug, label, created_at) VALUES (?, ?, ?)",
+                (_SEATS_SEARCH_SLUG, _SEATS_SEARCH_LABEL, now),
+            )
+            self.conn.execute(
+                "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+                (_SEATS_SEARCH_MIGRATION_ID, now),
             )
             self.conn.execute("COMMIT")
         except Exception:
