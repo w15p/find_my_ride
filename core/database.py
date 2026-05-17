@@ -312,6 +312,20 @@ class ListingDB:
             "UPDATE listings SET sold_signals_count = 0 WHERE url=? AND sold_signals_count > 0",
             (url,),
         )
+
+    def update_image_url(self, url: str, image_url: Optional[str]) -> None:
+        """Refresh the stored image URL for a listing.
+
+        Facebook's CDN signs image URLs with a ~24-48h TTL (`oe=` query
+        param), so stored URLs go stale and start returning 403 after a day
+        or so. The `--refresh-fb-images` CLI command walks active FB
+        listings and calls this to swap in a fresh URL.
+        """
+        self.conn.execute(
+            "UPDATE listings SET image_url=? WHERE url=?",
+            (image_url, url),
+        )
+        self.conn.commit()
         self.conn.commit()
 
     def update_dedupe_fields(self, url: str, *, image_phash: Optional[str], fingerprint: Optional[str], canonical_url: Optional[str]) -> None:

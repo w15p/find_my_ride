@@ -70,7 +70,7 @@ _HTML_TEMPLATE = """
 </style>
 </head>
 <body>
-<h2>Ford Escort Mk1 LHD — {{ count }} new listing{{ 's' if count != 1 else '' }}</h2>
+<h2>{{ search_label }} — {{ count }} new listing{{ 's' if count != 1 else '' }}</h2>
 {% for l in listings %}
 <div class="listing">
   {% if l.image_url %}
@@ -105,7 +105,7 @@ _HTML_TEMPLATE = """
 </html>
 """
 
-_PLAIN_TEMPLATE = """Ford Escort Mk1 LHD — {{ count }} new listing{{ 's' if count != 1 else '' }}
+_PLAIN_TEMPLATE = """{{ search_label }} — {{ count }} new listing{{ 's' if count != 1 else '' }}
 
 {% for l in listings %}
 {{ loop.index }}. {{ l.title }}
@@ -167,12 +167,18 @@ class EmailNotifier:
         self,
         listings: List[Listing],
         duplicates_by_canonical: dict[str, List[Listing]] | None = None,
+        search_label: str = "Ford Escort Mk1 LHD",
     ) -> None:
         """Send the daily digest.
 
         `duplicates_by_canonical` maps a canonical listing's URL → list of
         Listing objects that were detected as duplicates of it (cross-source
         merges). They're rendered as a "Also on:" footer on the canonical card.
+
+        `search_label` is the human-readable name of the saved search (from the
+        `searches.label` column). It appears in the email subject and both
+        HTML/plain templates. Defaults to the Escort Mk1 label so existing
+        callers that don't pass it keep identical behaviour.
         """
         if not listings:
             return
@@ -191,12 +197,12 @@ class EmailNotifier:
             ] or None
 
         env = Environment(loader=BaseLoader(), autoescape=False)
-        ctx = {"listings": listings, "count": len(listings)}
+        ctx = {"listings": listings, "count": len(listings), "search_label": search_label}
 
         html_body = env.from_string(_HTML_TEMPLATE).render(**ctx)
         plain_body = env.from_string(_PLAIN_TEMPLATE).render(**ctx)
 
-        subject = f"[Escort Mk1] {len(listings)} new listing{'s' if len(listings) != 1 else ''}"
+        subject = f"[{search_label}] {len(listings)} new listing{'s' if len(listings) != 1 else ''}"
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject

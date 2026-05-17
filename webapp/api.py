@@ -65,7 +65,7 @@ class OverrideBody(BaseModel):
 
 from core.countries import enhance_location
 from core.currency import format_price, usd_value
-from core.database import ListingDB, listings_select_sql, user_col_expr
+from core.database import ListingDB, _DEFAULT_SEARCH_SLUG, listings_select_sql, user_col_expr
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +142,23 @@ def _row_to_dict(r) -> dict:
 def create_app() -> FastAPI:
     cfg = _load_cfg()
     db_path = cfg.get("database", {}).get("path", "listings.db")
-    app = FastAPI(title="Escort Mk1 Review")
+
+    # Derive the app title from the searches table so it reflects the actual
+    # saved-search label rather than a hardcoded string.
+    _resolved_db = str(ROOT / db_path) if not Path(db_path).is_absolute() else db_path
+    try:
+        import sqlite3 as _sqlite3
+        _c = _sqlite3.connect(_resolved_db)
+        _c.row_factory = _sqlite3.Row
+        _row = _c.execute(
+            "SELECT label FROM searches WHERE slug = ?", (_DEFAULT_SEARCH_SLUG,)
+        ).fetchone()
+        _app_title = _row["label"] if _row else "Listings Review"
+        _c.close()
+    except Exception:
+        _app_title = "Listings Review"
+
+    app = FastAPI(title=_app_title)
 
     # Vite dev server proxies `/api`, but allow direct CORS for flexibility.
     app.add_middleware(

@@ -36,7 +36,7 @@ from dotenv import load_dotenv
 
 from core.countries import enhance_location
 from core.currency import format_price, rates_available, usd_value
-from core.database import ListingDB
+from core.database import ListingDB, _DEFAULT_SEARCH_LABEL, _DEFAULT_SEARCH_SLUG
 from core.http_client import make_session, polite_get
 from core.models import Listing
 from core.notifier import EmailNotifier
@@ -77,7 +77,10 @@ _DEFAULT_SOLD_SIGNALS = [
 
 # Stop-words stripped before fingerprinting a title — these tokens are present
 # in almost every Escort Mk1 listing and add no signal for cross-source matching.
-_FINGERPRINT_STOPWORDS = {
+# A different search (e.g. RS2000 seats) would use a different set; pass it
+# explicitly to _compute_fingerprint via the `stopwords` parameter.
+# TODO: read per-search stopwords from searches.config_json once that column exists
+_FINGERPRINT_STOPWORDS: set[str] = {
     "ford", "escort", "mk1", "mki", "mk", "mark", "1", "i",
     "for", "sale", "lhd", "rhd", "two", "door", "2-door", "2dr",
     "the", "a", "of", "&", "and", "-", "lh", "rh",
@@ -267,10 +270,16 @@ def _auto_crop_sharp(img, np, laplace):
     return img.crop((x0, y0, x1, y1))
 
 
-def _compute_fingerprint(listing: Listing) -> str:
-    """Stable hash of the bits that identify the *car*, not the listing."""
+def _compute_fingerprint(listing: Listing, stopwords: set[str] | None = None) -> str:
+    """Stable hash of the bits that identify the *car*, not the listing.
+
+    `stopwords` overrides the module-level `_FINGERPRINT_STOPWORDS` default,
+    allowing callers to pass a search-specific word list without mutating global
+    state. Pass `None` (the default) to use the built-in Escort Mk1 set.
+    """
+    effective_stopwords = _FINGERPRINT_STOPWORDS if stopwords is None else stopwords
     tokens = _title_tokens(listing.title or "")
-    distinctive = sorted(t for t in tokens if t not in _FINGERPRINT_STOPWORDS)
+    distinctive = sorted(t for t in tokens if t not in effective_stopwords)
     usd = usd_value(listing.price_value, listing.price_currency) or 0
     bucket = int(round(usd / 250) * 250)
     payload = f"{listing.year or 0}|{(listing.country_code or '').upper()}|{'-'.join(distinctive)}|{bucket}"
@@ -403,6 +412,73 @@ def _fb_profile_dir(cfg: dict) -> str:
 # hit "Buy and sell groups", "Sold by …", footer copy, etc. — this pattern is
 # specific to FB's status badge.)
 _FB_SOLD_LINE = re.compile(r"^Sold\s*$", re.MULTILINE)
+
+
+def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
+    """Re-fetch the hero image URL for every active Facebook listing.
+
+    Facebook signs CDN image URLs with a ~24-48h TTL (`oe=` query param);
+    after expiry the URL returns 403 and the review UI shows broken images.
+    The normal scrape cycle never refreshes URLs for already-known listings
+    (filter_new drops them), so without this command stored URLs go stale
+    within a day or two. Cron-friendly: re-run as often as desired.
+    """
+    log = logging.getLogger("refresh.fb")
+    rows = db.conn.execute(
+        "SELECT url FROM listings WHERE site_name='facebook' AND status='active'"
+    ).fetchall()
+    urls = [r["url"] for r in rows]
+    if not urls:
+        log.info("No active Facebook listings to refresh.")
+        return
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        log.error("Playwright not available — cannot refresh: %s", exc)
+        return
+    # Import here so the heavy `scrapers.facebook` module isn't loaded for
+    # CLI commands that don't need it.
+    from scrapers.facebook import _read_dom_image
+
+    profile_dir = _fb_profile_dir(cfg)
+    updated = unchanged = failed = 0
+    log.info("Refreshing image URLs for %d Facebook listing(s)", len(urls))
+    with sync_playwright() as p:
+        ctx = p.chromium.launch_persistent_context(
+            user_data_dir=profile_dir,
+            headless=True,
+            viewport={"width": 1366, "height": 768},
+            locale="en-GB",
+        )
+        page = ctx.new_page()
+        for i, url in enumerate(urls, 1):
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                time.sleep(random.uniform(1.0, 2.0))
+                new_img = _read_dom_image(page)
+                if not new_img:
+                    failed += 1
+                    log.warning("[%d/%d] No image extracted from %s", i, len(urls), url)
+                    continue
+                current = db.conn.execute(
+                    "SELECT image_url FROM listings WHERE url=?", (url,)
+                ).fetchone()
+                if current and current["image_url"] == new_img:
+                    unchanged += 1
+                else:
+                    db.update_image_url(url, new_img)
+                    updated += 1
+                    log.info("[%d/%d] Updated: %s", i, len(urls), url[:80])
+                time.sleep(random.uniform(1.0, 2.0))
+            except Exception as exc:
+                failed += 1
+                log.warning("[%d/%d] Failed for %s: %s", i, len(urls), url, exc)
+        ctx.close()
+    log.info(
+        "Refresh complete: %d updated, %d unchanged, %d failed (of %d total)",
+        updated, unchanged, failed, len(urls),
+    )
 
 
 def _is_fb_sold(body_text: str, generic_signals: list[str]) -> bool:
@@ -582,10 +658,17 @@ def cmd_send_digest(cfg: dict, db: ListingDB, hours: int = 24, skip_validate: bo
         if dups:
             duplicates_by_canonical[r["url"]] = [_row_to_listing(d) for d in dups]
 
+    # Read the search label from the DB so the digest email reflects the actual
+    # saved-search name rather than a hardcoded string.
+    search_row = db.conn.execute(
+        "SELECT label FROM searches WHERE slug = ?", (_DEFAULT_SEARCH_SLUG,)
+    ).fetchone()
+    search_label = search_row["label"] if search_row else _DEFAULT_SEARCH_LABEL
+
     notif_cfg = cfg.get("notification", {})
     if notif_cfg.get("type") == "email":
         notifier = EmailNotifier(notif_cfg.get("email", {}))
-        notifier.send_digest(listings, duplicates_by_canonical)
+        notifier.send_digest(listings, duplicates_by_canonical, search_label=search_label)
         log.info("Digest sent: %d canonical listing(s) from the last %dh", len(listings), hours)
     else:
         log.warning("No email notifier configured.")
@@ -637,6 +720,9 @@ def main() -> None:
                         help="Start the FastAPI + React review app on localhost:8002")
     parser.add_argument("--fb-login", action="store_true",
                         help="One-time Facebook login to save session cookies")
+    parser.add_argument("--refresh-fb-images", action="store_true",
+                        help="Re-fetch image URLs for active Facebook listings "
+                             "(FB CDN URLs expire after ~24-48h)")
     parser.add_argument("--config", default="config/config.yaml",
                         help="Path to config.yaml (default: config/config.yaml)")
     args = parser.parse_args()
@@ -656,6 +742,10 @@ def main() -> None:
     if args.fb_login:
         profile_dir = _fb_profile_dir(cfg)
         login_and_save_session(profile_dir)
+        return
+
+    if args.refresh_fb_images:
+        cmd_refresh_fb_images(cfg, db)
         return
 
     if args.validate:
