@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS tenant_listing_state (
 
 _STRUCTURAL_MIGRATION_ID = "001_search_split"
 _SEATS_SEARCH_MIGRATION_ID = "002_seats_search"
+_ORPHAN_BACKFILL_MIGRATION_ID = "003_orphan_backfill"
 _DEFAULT_SEARCH_SLUG = "escort_mk1_lhd"
 _DEFAULT_SEARCH_LABEL = "Ford Escort Mk1 LHD"
 _DEFAULT_TENANT_ID = "default"
@@ -122,23 +123,40 @@ def _validate_tenant_id(tenant_id: str) -> str:
     return tenant_id
 
 
-def listings_select_sql(tenant_id: str = _DEFAULT_TENANT_ID) -> str:
+def listings_select_sql(
+    tenant_id: str = _DEFAULT_TENANT_ID,
+    search_id: Optional[int] = None,
+) -> str:
     """Return `SELECT … FROM listings l LEFT JOIN tenant_listing_state tls …`
     suitable for use as the prefix of any listing query. User-state columns
     appear once, COALESCE-aliased to their legacy names, so callers (and
     `_row_to_dict` / `_row_to_listing`) see the effective value transparently.
+
+    When `search_id` is set, also INNER JOINs `search_matches` filtered to
+    that search — restricting results to listings that match the given
+    saved search. When None, returns all listings regardless of search
+    membership (back-compat for callers that don't yet need per-search
+    scoping).
     """
     tenant_id = _validate_tenant_id(tenant_id)
     non_user = ", ".join(f"l.{c}" for c in _LISTING_COLS_NON_USER)
     user = ", ".join(
         f"COALESCE(tls.{c}, l.{c}) AS {c}" for c in _USER_STATE_COLS
     )
-    return (
+    sql = (
         f"SELECT {non_user}, {user} "
         f"FROM listings l "
         f"LEFT JOIN tenant_listing_state tls "
         f"ON tls.tenant_id = '{tenant_id}' AND tls.listing_url = l.url"
     )
+    if search_id is not None:
+        # int() coerces — raises TypeError on non-numeric input rather than
+        # letting a string slip into the interpolated SQL. No injection risk.
+        sql += (
+            f" INNER JOIN search_matches sm "
+            f"ON sm.listing_url = l.url AND sm.search_id = {int(search_id)}"
+        )
+    return sql
 
 
 def user_col_expr(col: str) -> str:
@@ -212,6 +230,7 @@ class ListingDB:
             # 001 already done — fall through to later migrations rather than
             # short-circuiting. Each subsequent migration owns its own gate.
             self._migrate_seats_search()
+            self._migrate_orphan_backfill()
             return
 
         now = datetime.utcnow().isoformat()
@@ -265,6 +284,7 @@ class ListingDB:
             raise
 
         self._migrate_seats_search()
+        self._migrate_orphan_backfill()
 
     def _migrate_seats_search(self) -> None:
         """Seed the `searches` row for the RS2000 / Mexico seats hunt.
@@ -291,6 +311,43 @@ class ListingDB:
             self.conn.execute(
                 "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
                 (_SEATS_SEARCH_MIGRATION_ID, now),
+            )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
+    def _migrate_orphan_backfill(self) -> None:
+        """Tag any listings missing from `search_matches` under search_id=1.
+
+        Earlier `db.save()` versions only wrote to `listings` and didn't tag
+        `search_matches`. After Commit 2's INNER JOIN on search_matches in
+        the read path, any listing without a match would silently disappear
+        from the API. Backfill every untagged listing under search_id=1
+        (the cars hunt) since all pre-existing scrapes were cars.
+        """
+        already = self.conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE id = ?",
+            (_ORPHAN_BACKFILL_MIGRATION_ID,),
+        ).fetchone()
+        if already:
+            return
+
+        now = datetime.utcnow().isoformat()
+        self.conn.execute("BEGIN")
+        try:
+            self.conn.execute(
+                """INSERT OR IGNORE INTO search_matches (search_id, listing_url, matched_at)
+                   SELECT 1, l.url, ?
+                   FROM   listings l
+                   LEFT JOIN search_matches sm
+                          ON sm.listing_url = l.url AND sm.search_id = 1
+                   WHERE  sm.listing_url IS NULL""",
+                (now,),
+            )
+            self.conn.execute(
+                "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+                (_ORPHAN_BACKFILL_MIGRATION_ID, now),
             )
             self.conn.execute("COMMIT")
         except Exception:

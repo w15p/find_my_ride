@@ -191,6 +191,10 @@ def create_app() -> FastAPI:
         steering: Optional[str] = None,
         sort: str = "scraped_at_desc",
         limit: int = 500,
+        # search_id scopes results to listings matched under that saved
+        # search (joined via search_matches). Default 1 = cars hunt.
+        # Existing clients without the param keep seeing the cars feed.
+        search_id: int = 1,
     ):
         # `user_*` references in WHERE/ORDER use COALESCE(tls.*, l.*) so that
         # writes to tenant_listing_state override the legacy column. The
@@ -247,7 +251,7 @@ def create_app() -> FastAPI:
         order = f"{u_pinned} DESC, {u_pinnedat} DESC NULLS LAST, {secondary}"
 
         db = get_db()
-        sql = f"{listings_select_sql()} {where} ORDER BY {order} LIMIT ?"
+        sql = f"{listings_select_sql(search_id=search_id)} {where} ORDER BY {order} LIMIT ?"
         rows = db.conn.execute(sql, (*params, limit)).fetchall()
 
         # In-Python USD filter — keeps SQL portable without a Python-side function.
@@ -300,6 +304,19 @@ def create_app() -> FastAPI:
     def get_reasons():
         cfg = _load_cfg()
         return cfg.get("review", {}).get("reject_reasons", [])
+
+    @app.get("/api/searches")
+    def list_searches():
+        """List all saved searches for the UI dropdown.
+
+        Returns [{id, slug, label}]. The frontend uses `id` as the
+        search_id parameter on /api/listings.
+        """
+        db = get_db()
+        rows = db.conn.execute(
+            "SELECT id, slug, label FROM searches ORDER BY id"
+        ).fetchall()
+        return [{"id": r["id"], "slug": r["slug"], "label": r["label"]} for r in rows]
 
     @app.get("/api/stats")
     def stats():
