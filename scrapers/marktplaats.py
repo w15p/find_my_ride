@@ -5,7 +5,7 @@ import os
 import re
 import time
 from typing import List, Optional
-from urllib.parse import urljoin
+from urllib.parse import quote_plus, urljoin
 
 from bs4 import BeautifulSoup
 
@@ -15,7 +15,7 @@ from scrapers.base import BaseScraper
 
 API_TOKEN_URL = "https://auth.marktplaats.nl/oauth/token"
 API_SEARCH_URL = "https://api.marktplaats.nl/v1/search"
-HTML_SEARCH_URL = "https://www.marktplaats.nl/q/ford+escort+mk1/"
+HTML_SEARCH_URL_TMPL = "https://www.marktplaats.nl/q/{q}/"
 BASE_URL = "https://www.marktplaats.nl"
 
 LHD_KEYWORDS = {"lhd", "left hand drive", "left-hand drive", "linksgestuurd", "links gestuurd"}
@@ -24,8 +24,8 @@ LHD_KEYWORDS = {"lhd", "left hand drive", "left-hand drive", "linksgestuurd", "l
 class MarktplaatsScraper(BaseScraper):
     site_name = "marktplaats"
 
-    def __init__(self, config: dict, http_client) -> None:
-        super().__init__(config, http_client)
+    def __init__(self, config: dict, http_client, **kwargs) -> None:
+        super().__init__(config, http_client, **kwargs)
         self._token: Optional[str] = None
         self._token_expiry: float = 0.0
 
@@ -66,7 +66,7 @@ class MarktplaatsScraper(BaseScraper):
         token = self._get_token(client_id, client_secret)
         headers = {"Authorization": f"Bearer {token}"}
         params = {
-            "query": "ford escort mk1 lhd",
+            "query": self.query,
             "categoryId": self.config.get("category_id", 91),
             "limit": 100,
             "sortBy": "default",
@@ -142,7 +142,7 @@ class MarktplaatsScraper(BaseScraper):
         self.log.info("Using Marktplaats HTML fallback")
         results: List[Listing] = []
         try:
-            resp = polite_get(self.http, HTML_SEARCH_URL)
+            resp = polite_get(self.http, HTML_SEARCH_URL_TMPL.format(q=quote_plus(self.query)))
         except Exception as exc:
             self.log.warning("Marktplaats HTML request failed: %s", exc)
             return []

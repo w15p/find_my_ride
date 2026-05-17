@@ -21,8 +21,8 @@ LHD_KEYWORDS = {"lhd", "left hand drive", "left-hand drive", "linksteuerung"}
 class EbayScraper(BaseScraper):
     site_name = "ebay"
 
-    def __init__(self, config: dict, http_client) -> None:
-        super().__init__(config, http_client)
+    def __init__(self, config: dict, http_client, **kwargs) -> None:
+        super().__init__(config, http_client, **kwargs)
         self._token: Optional[str] = None
         self._token_expiry: float = 0.0
 
@@ -130,7 +130,7 @@ class EbayScraper(BaseScraper):
         # the central reject-keywords + $2K USD floor in `_should_keep` cull
         # everything that isn't a real car.
         params = {
-            "q": "ford escort mk1",
+            "q": self.query,
             "sort": "newlyListed",
             "limit": "200",
         }

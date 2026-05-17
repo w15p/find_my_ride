@@ -89,10 +89,11 @@ class FacebookScraper(BaseScraper):
     # ------------------------------------------------------------------ search
 
     def _search_location(self, page, loc: dict, radius_km: int) -> set[str]:
+        from urllib.parse import quote_plus
         found: set[str] = set()
         url = (
             f"{BASE_URL}/marketplace/search/"
-            f"?query=ford+escort+mk1"
+            f"?query={quote_plus(self.query)}"
             f"&latitude={loc['lat']}&longitude={loc['lng']}"
             f"&radius={radius_km}&exact=false"
         )

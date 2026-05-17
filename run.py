@@ -150,35 +150,45 @@ def _matches_reject_keyword(title: str, keywords: list[str]) -> bool:
     return False
 
 
-def _should_keep(listing: Listing, cfg: dict, log: logging.Logger) -> bool:
-    filt = cfg.get("filters", {})
-    year_from = filt.get("year_from", 1968)
-    year_to = filt.get("year_to", 1975)
+def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
+    """Decide whether to keep a listing at save time.
 
-    # Year — known years must be in range; unknown years require a Mk1 signal in title.
-    if listing.year is not None:
-        if not (year_from <= listing.year <= year_to):
-            log.debug("Reject (year): %s", listing.url)
-            return False
-    else:
-        title_lower = (listing.title or "").lower()
-        if not any(kw in title_lower for kw in ("mk1", "mk 1", "mki", "mk i", "mark 1", "mark i")):
-            log.debug("Reject (no year + no mk1 signal): %s", listing.url)
-            return False
+    `filt` is the per-search filters dict (e.g. cfg["filters"] for the cars
+    hunt during back-compat, or cfg["searches"][slug]["filters"] for any
+    other search). Missing keys are treated as "no constraint" — e.g. the
+    seats hunt has no year window and a much lower price floor.
+    """
+    year_from = filt.get("year_from")
+    year_to = filt.get("year_to")
 
-    # Steering — RHD is accepted (low-probability conversion candidate per user).
-    # The digest renders "Drive: RHD" so the buyer can deprioritise visually.
+    # Year — if a year window is configured, enforce it. Listings with no
+    # scraped year must carry a Mk-version signal in the title (a cars-hunt
+    # heuristic to filter scale models and parts); a search with no year
+    # window skips this check entirely (seats don't have meaningful years).
+    if year_from is not None or year_to is not None:
+        if listing.year is not None:
+            if year_from is not None and listing.year < year_from:
+                log.debug("Reject (year < %d): %s", year_from, listing.url)
+                return False
+            if year_to is not None and listing.year > year_to:
+                log.debug("Reject (year > %d): %s", year_to, listing.url)
+                return False
+        else:
+            title_lower = (listing.title or "").lower()
+            if not any(kw in title_lower for kw in ("mk1", "mk 1", "mki", "mk i", "mark 1", "mark i")):
+                log.debug("Reject (no year + no mk1 signal): %s", listing.url)
+                return False
 
     # Reject keywords
-    reject_kws = filt.get("reject_title_keywords", [])
+    reject_kws = filt.get("reject_title_keywords") or []
     if reject_kws and _matches_reject_keyword(listing.title or "", reject_kws):
         log.debug("Reject (title keyword): %s — %s", listing.url, listing.title)
         return False
 
     # USD price window
-    min_usd = filt.get("min_price_usd", 2000)
+    min_usd = filt.get("min_price_usd")
     max_usd = filt.get("max_price_usd")
-    if min_usd or max_usd:
+    if min_usd is not None or max_usd is not None:
         usd = usd_value(listing.price_value, listing.price_currency)
         if usd is None:
             if not rates_available():
@@ -187,10 +197,10 @@ def _should_keep(listing: Listing, cfg: dict, log: logging.Logger) -> bool:
                 return True
             log.debug("Reject (no convertible price): %s", listing.url)
             return False
-        if min_usd and usd < min_usd:
+        if min_usd is not None and usd < min_usd:
             log.debug("Reject (under $%d USD: $%.0f): %s", min_usd, usd, listing.url)
             return False
-        if max_usd and usd > max_usd:
+        if max_usd is not None and usd > max_usd:
             log.debug("Reject (over $%d USD: $%.0f): %s", max_usd, usd, listing.url)
             return False
 
@@ -336,55 +346,100 @@ def _find_canonical(listing: Listing, db: ListingDB, cfg: dict) -> Optional[str]
 def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
     session = make_session()
     sites_cfg = cfg.get("sites", {})
-
-    active_sites = args.sites or [
-        k for k, v in sites_cfg.items() if v.get("enabled", True)
-    ]
-
-    all_new: list[Listing] = []
+    searches_cfg = cfg.get("searches", {})
     log = logging.getLogger("run")
 
-    for site_key in active_sites:
-        if site_key not in SCRAPER_MAP:
-            log.warning("Unknown site: %s — skipping", site_key)
+    # Back-compat: a config with no `searches:` section is treated as a single
+    # cars-only search. Lets older configs keep working unchanged.
+    if not searches_cfg:
+        from scrapers.base import DEFAULT_QUERY, DEFAULT_REQUIRED_KEYWORDS
+        searches_cfg = {
+            _DEFAULT_SEARCH_SLUG: {
+                "label": _DEFAULT_SEARCH_LABEL,
+                "query": DEFAULT_QUERY,
+                "required_keywords": list(DEFAULT_REQUIRED_KEYWORDS),
+                "sites": list(SCRAPER_MAP.keys()),
+            }
+        }
+
+    # Resolve slug → search_id once. Skip slugs that haven't been seeded in the
+    # DB (migration didn't run, or YAML config drifted from migrations).
+    search_ids = {
+        row["slug"]: row["id"]
+        for row in db.conn.execute("SELECT id, slug FROM searches")
+    }
+
+    from core.geocode import lookup_country
+    from core.translate import detect_and_translate
+
+    all_new: list[Listing] = []
+    for slug, search_cfg in searches_cfg.items():
+        search_id = search_ids.get(slug)
+        if search_id is None:
+            log.warning("Search %r not in `searches` table — skipping. Did migrations run?", slug)
             continue
-        site_config = sites_cfg.get(site_key, {})
-        scraper = SCRAPER_MAP[site_key](config=site_config, http_client=session)
-        log.info("Running scraper: %s", site_key)
 
-        listings = scraper._safe_fetch()
-        log.info("  %d total listings fetched from %s", len(listings), site_key)
+        # Per-search filters; the cars hunt falls back to the top-level
+        # `filters:` block during back-compat (Commit 1 left it in place).
+        search_filters = search_cfg.get("filters") or cfg.get("filters", {})
 
-        # Drop junk before doing any further work (avoids wasted phash downloads)
-        kept = [l for l in listings if _should_keep(l, cfg, log)]
-        log.info("  %d passed save-time filter", len(kept))
+        # Per-search site list, intersected with --sites CLI override if any.
+        search_sites = search_cfg.get("sites") or list(SCRAPER_MAP.keys())
+        if args.sites:
+            search_sites = [s for s in search_sites if s in args.sites]
+        # Sites disabled in `sites:` config are honored across all searches.
+        search_sites = [
+            s for s in search_sites
+            if sites_cfg.get(s, {}).get("enabled", True)
+        ]
 
-        new = db.filter_new(kept)
-        log.info("  %d new (URL-unseen)", len(new))
+        log.info("=== Search: %s (id=%d) — %d site(s) ===",
+                 slug, search_id, len(search_sites))
 
-        # Compute phash + fingerprint, then look for cross-source duplicates.
-        # Also detect language and translate non-English descriptions so the
-        # review-app card and digest can render English by default.
-        # And fill country_code via Nominatim when the scraper missed it.
-        from core.geocode import lookup_country
-        from core.translate import detect_and_translate
-        for l in new:
-            l.image_phash = _compute_phash(l.image_url)
-            l.fingerprint = _compute_fingerprint(l)
-            l.canonical_url = _find_canonical(l, db, cfg)
-            if l.canonical_url:
-                log.info("  Duplicate: %s → canonical %s", l.url, l.canonical_url)
-            if l.description:
-                l.description_language, l.description_translated = detect_and_translate(l.description)
-            if l.location and not l.country_code:
-                iso = lookup_country(l.location)
-                if iso:
-                    l.country_code = iso
+        for site_key in search_sites:
+            if site_key not in SCRAPER_MAP:
+                log.warning("Unknown site: %s — skipping", site_key)
+                continue
+            site_config = sites_cfg.get(site_key, {})
+            scraper = SCRAPER_MAP[site_key](
+                config=site_config,
+                http_client=session,
+                query=search_cfg.get("query", "ford escort mk1"),
+                required_keywords=search_cfg.get("required_keywords", ("escort",)),
+            )
+            log.info("Running scraper: %s (search=%s)", site_key, slug)
 
-        if not args.check_only:
-            db.save(new)
+            listings = scraper._safe_fetch()
+            log.info("  %d total listings fetched from %s", len(listings), site_key)
 
-        all_new.extend(new)
+            # Drop junk before doing any further work (avoids wasted phash downloads)
+            kept = [l for l in listings if _should_keep(l, search_filters, log)]
+            log.info("  %d passed save-time filter", len(kept))
+
+            new = db.filter_new(kept, search_id=search_id)
+            log.info("  %d new for search_id=%d", len(new), search_id)
+
+            # Compute phash + fingerprint, then look for cross-source duplicates.
+            # Also detect language and translate non-English descriptions so the
+            # review-app card and digest can render English by default.
+            # And fill country_code via Nominatim when the scraper missed it.
+            for l in new:
+                l.image_phash = _compute_phash(l.image_url)
+                l.fingerprint = _compute_fingerprint(l)
+                l.canonical_url = _find_canonical(l, db, cfg)
+                if l.canonical_url:
+                    log.info("  Duplicate: %s → canonical %s", l.url, l.canonical_url)
+                if l.description:
+                    l.description_language, l.description_translated = detect_and_translate(l.description)
+                if l.location and not l.country_code:
+                    iso = lookup_country(l.location)
+                    if iso:
+                        l.country_code = iso
+
+            if not args.check_only:
+                db.save(new, search_id=search_id)
+
+            all_new.extend(new)
 
     return all_new
 

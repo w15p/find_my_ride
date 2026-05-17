@@ -297,15 +297,35 @@ class ListingDB:
             self.conn.execute("ROLLBACK")
             raise
 
-    def filter_new(self, listings: List[Listing]) -> List[Listing]:
-        """Return only listings whose URL is not already stored."""
+    def filter_new(self, listings: List[Listing], search_id: int = 1) -> List[Listing]:
+        """Return only listings that don't yet match the given search.
+
+        A URL can be present in `listings` but unmatched to a particular
+        search (e.g. a car was scraped under the cars search, and now also
+        matches the seats search via a different keyword). The new-listings
+        decision is per-search, not per-URL.
+        """
         if not listings:
             return []
-        seen = {row["url"] for row in self.conn.execute("SELECT url FROM listings")}
+        seen = {
+            row["listing_url"] for row in self.conn.execute(
+                "SELECT listing_url FROM search_matches WHERE search_id = ?",
+                (search_id,),
+            )
+        }
         return [l for l in listings if l.url not in seen]
 
-    def save(self, listings: List[Listing]) -> None:
-        """Insert new listings; silently skip duplicates by URL."""
+    def save(self, listings: List[Listing], search_id: int = 1) -> None:
+        """Insert new listings AND tag them under the given search.
+
+        Two INSERT OR IGNOREs: one against `listings` (skips if URL already
+        present — same listing might match multiple searches), one against
+        `search_matches` to record that this URL belongs to this search.
+        Default `search_id=1` preserves single-search behaviour for any
+        legacy callers that haven't been updated.
+        """
+        if not listings:
+            return
         self.conn.executemany(
             """INSERT OR IGNORE INTO listings
                (url, site_name, title, price, price_value, price_currency,
@@ -327,6 +347,12 @@ class ListingDB:
                 )
                 for l in listings
             ],
+        )
+        now = datetime.utcnow().isoformat()
+        self.conn.executemany(
+            """INSERT OR IGNORE INTO search_matches (search_id, listing_url, matched_at)
+               VALUES (?, ?, ?)""",
+            [(search_id, l.url, now) for l in listings],
         )
         self.conn.commit()
 

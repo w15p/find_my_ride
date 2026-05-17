@@ -4,6 +4,7 @@ import html as html_module
 import json
 import re
 from typing import List, Optional
+from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
 
@@ -12,9 +13,10 @@ from core.models import Listing
 from scrapers.base import BaseScraper
 
 BASE_URL = "https://www.carandclassic.com"
-# Free-text search; broader "mark 1" wording catches /la/ basics listings
-# (e.g. "1970 Ford Escort Mexico Mark 1") that "mk1" misses entirely.
-SEARCH_URL = BASE_URL + "/search?q=ford+escort+mark+1&page={page}"
+# Query string is per-search (`self.query`); URL-encoded into the C&C free-text
+# search endpoint. For the default cars hunt, "ford escort mk1" gives broader
+# matches via C&C's own fuzzy matching than the prior literal "mark 1" did.
+SEARCH_URL_TMPL = BASE_URL + "/search?q={q}&page={page}"
 
 INERTIA_RE = re.compile(
     r'<script\s+data-page="app"\s+type="application/json">(.*?)</script>',
@@ -35,7 +37,7 @@ class CarAndClassicScraper(BaseScraper):
         page = 1
 
         while True:
-            url = SEARCH_URL.format(page=page)
+            url = SEARCH_URL_TMPL.format(q=quote_plus(self.query), page=page)
             self.log.info("Fetching page %d: %s", page, url)
             try:
                 resp = polite_get(
