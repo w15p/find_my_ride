@@ -601,11 +601,25 @@ def _validate_facebook(cfg: dict, db: ListingDB, urls: list[str], sold_signals: 
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 time.sleep(random.uniform(1.0, 2.0))
+                # Scope the "Sold" text scan to the main listing pane only.
+                # FB's sidebar shows "More from this seller" / "Related
+                # listings" tiles, and those tiles render a literal "Sold"
+                # badge for the seller's other sold items — which the
+                # whole-page regex was incorrectly attributing to the target
+                # listing. Same anchor-to-target bug class as the FB title
+                # attribution fix from commit eff40b8.
                 body_text = ""
                 try:
-                    body_text = page.locator("body").inner_text(timeout=5000) or ""
+                    body_text = page.locator('[role="main"]').inner_text(timeout=5000) or ""
                 except Exception:
-                    body_text = page.content()
+                    # FB may change the role attr — fall back to whole-body
+                    # so we don't silently stop detecting sold listings.
+                    # Risk: re-introduces the sidebar FP; acceptable as a
+                    # rare fallback rather than a default.
+                    try:
+                        body_text = page.locator("body").inner_text(timeout=5000) or ""
+                    except Exception:
+                        body_text = page.content()
                 if _is_fb_sold(body_text, sold_signals):
                     new_count = db.increment_sold_signal(url)
                     if new_count >= threshold:
