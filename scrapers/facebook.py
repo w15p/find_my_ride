@@ -66,13 +66,19 @@ class FacebookScraper(BaseScraper):
             )
 
             search_page = ctx.new_page()
+            # Per-anchor sleep was 2-4s; FB throttled hard at that rate
+            # (19/23 anchors returning 0 results in the 23-anchor rerun).
+            # Direct testing with 8-12s spacing produced 36/36/20/36 across
+            # 4 queries from a single anchor — so 30-60s with jitter sits
+            # well inside the safe zone and still keeps total search time
+            # to ~12-23 min for the full 23-anchor sweep.
             for loc in locations:
                 self.log.info("Searching Facebook near %s", loc["name"])
                 urls = self._search_location(search_page, loc, radius_km)
                 new_urls = urls - all_listing_urls
                 all_listing_urls |= new_urls
                 self.log.info("  %d new listing URLs near %s", len(new_urls), loc["name"])
-                time.sleep(random.uniform(2.0, 4.0))
+                time.sleep(random.uniform(30.0, 60.0))
 
             detail_page = ctx.new_page()
             for listing_url in all_listing_urls:
