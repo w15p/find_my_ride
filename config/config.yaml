@@ -193,11 +193,11 @@ searches:
         category_ids:
           EBAY_GB: "33701"   # Vehicle Parts > Car Parts > Interior > Seats
     filters:
-      # Cheap enough to exclude obvious junk listings / scams, low enough to
-      # catch real bargains. Tune after the first scrape.
-      min_price_usd: 50
-      # No ceiling — even a £2K refurbished pair is plausible if NOS.
-      max_price_usd: null
+      # Sized to the seats market: under $500 is almost always badges /
+      # covers / parts-of-parts; over $7000 is a whole car (the cars hunt's
+      # territory) leaking into the seats keyword search.
+      min_price_usd: 500
+      max_price_usd: 7000
       # Seats don't have meaningful years; skip the cars-style year window.
       year_from: null
       year_to: null
