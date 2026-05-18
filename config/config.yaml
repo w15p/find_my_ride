@@ -158,12 +158,21 @@ searches:
 
   rs2000_mexico_seats:
     label: "RS2000 / Mexico Seats"
-    # Broad enough to catch listings titled "Pair of RS2000 front seats",
-    # "Escort Mexico seats Mk1", "MK2 Mexico interior", etc. Each scraper
-    # URL-encodes this before substitution into its ?q= parameter.
-    query: "ford escort rs2000 mexico seats"
+    # Kept deliberately broad: eBay's keyword search is AND-on-words, so a
+    # narrow query like "ford escort rs2000 mexico seats" requires every one
+    # of those words in the title. Most seat sellers omit "ford" and many
+    # don't write "rs2000" or "mexico" — those listings were silently
+    # dropped. "escort seats" reaches ~675 results in the eBay Seats
+    # category; our title filter below (`required_keywords`) refines from
+    # there to the rs2000/mexico variants we actually want.
+    query: "escort seats"
     # OR semantics — any one keyword match passes the title filter.
+    # "seat" (singular) is included so seat-cover / seat-adjacent parts also
+    # surface for review — the user explicitly wants visibility to manually
+    # reject (rather than silently dropping). The pattern miner will learn
+    # the obvious rejects (seat belt, seat cover, etc.) over time.
     required_keywords:
+      - seat
       - seats
       - rs2000
       - mexico
@@ -174,6 +183,15 @@ searches:
       - ebay
       - marktplaats
       - facebook
+    # Per-site overrides — passed to the scraper as extra_params.
+    # eBay needs category targeting because its keyword query is too narrow
+    # without it (see comment on `query:` above). Marketplaces without a
+    # mapping are skipped on this search; add DE/NL category IDs here when
+    # those markets matter for seats.
+    site_overrides:
+      ebay:
+        category_ids:
+          EBAY_GB: "33701"   # Vehicle Parts > Car Parts > Interior > Seats
     filters:
       # Cheap enough to exclude obvious junk listings / scams, low enough to
       # catch real bargains. Tune after the first scrape.

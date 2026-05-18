@@ -396,6 +396,11 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
         log.info("=== Search: %s (id=%d) — %d site(s) ===",
                  slug, search_id, len(search_sites))
 
+        # Per-search per-site overrides (e.g. eBay seats hunt needs a
+        # `category_ids` override to escape eBay's AND-on-query-words
+        # filter that hides specific listings past the page-size cutoff).
+        site_overrides = search_cfg.get("site_overrides") or {}
+
         for site_key in search_sites:
             if site_key not in SCRAPER_MAP:
                 log.warning("Unknown site: %s — skipping", site_key)
@@ -406,6 +411,7 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
                 http_client=session,
                 query=search_cfg.get("query", "ford escort mk1"),
                 required_keywords=search_cfg.get("required_keywords", ("escort",)),
+                extra_params=site_overrides.get(site_key),
             )
             log.info("Running scraper: %s (search=%s)", site_key, slug)
 

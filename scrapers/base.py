@@ -24,12 +24,17 @@ class BaseScraper(ABC):
         http_client: requests.Session,
         query: str = DEFAULT_QUERY,
         required_keywords: Sequence[str] = DEFAULT_REQUIRED_KEYWORDS,
+        extra_params: dict | None = None,
     ) -> None:
         self.config = config
         self.http = http_client
         self.query = query
         # Stored lowercased so per-call comparisons don't re-lower each keyword.
         self.required_keywords = tuple(k.lower() for k in required_keywords)
+        # Per-search per-site overrides (e.g. eBay category_ids for the seats
+        # hunt). Empty dict by default; each scraper picks out the keys it
+        # cares about.
+        self.extra_params = extra_params or {}
         self.log = logging.getLogger(self.__class__.__name__)
 
     def title_matches_search(self, title: str | None) -> bool:

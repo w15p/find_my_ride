@@ -51,7 +51,11 @@ class EbayScraper(BaseScraper):
 
     def fetch_listings(self) -> List[Listing]:
         marketplaces = self.config.get("marketplaces", ["EBAY_GB", "EBAY_DE", "EBAY_NL"])
-        category_id = self.config.get("category_id", CLASSIC_CAR_CATEGORY)
+        # Per-search per-marketplace category overrides come in via extra_params
+        # from BaseScraper. Shape: {"EBAY_GB": "33701", "EBAY_DE": "..."}.
+        # When set, marketplaces without a mapping are SKIPPED — running an
+        # unbounded keyword query on those would defeat the point.
+        category_ids_by_mp = self.extra_params.get("category_ids") or {}
         results: List[Listing] = []
 
         try:
@@ -61,8 +65,19 @@ class EbayScraper(BaseScraper):
             return []
 
         for marketplace in marketplaces:
-            self.log.info("Searching eBay marketplace: %s", marketplace)
-            listings = self._search_marketplace(token, marketplace, category_id)
+            cat_id = category_ids_by_mp.get(marketplace) if category_ids_by_mp else None
+            if category_ids_by_mp and cat_id is None:
+                self.log.info(
+                    "Skipping eBay %s — no category mapping for this search.",
+                    marketplace,
+                )
+                continue
+            self.log.info(
+                "Searching eBay marketplace: %s%s",
+                marketplace,
+                f" (cat {cat_id})" if cat_id else "",
+            )
+            listings = self._search_marketplace(token, marketplace, cat_id)
             results.extend(listings)
 
         self.log.info("Total eBay listings found: %d", len(results))
@@ -115,25 +130,27 @@ class EbayScraper(BaseScraper):
                 listing.description = short[:1000]
 
     def _search_marketplace(
-        self, token: str, marketplace: str, category_id: str
+        self, token: str, marketplace: str, category_id: Optional[str] = None
     ) -> List[Listing]:
         headers = {
             "Authorization": f"Bearer {token}",
             "X-EBAY-C-MARKETPLACE-ID": marketplace,
             "Content-Type": "application/json",
         }
-        # No `lhd` in the query — UK sellers don't add it (RHD is the default
-        # there), and DE/NL sellers don't either (LHD is the default for them).
-        # No `category_ids` — eBay's category tree differs per marketplace
-        # (UK 9801 ≠ DE 9805 etc.), so a single ID throws away most of what
-        # we want. Volume gets large on DE/NL (~10k+ each, mostly parts) but
-        # the central reject-keywords + $2K USD floor in `_should_keep` cull
-        # everything that isn't a real car.
+        # Category targeting is per-search per-marketplace (set via
+        # extra_params['category_ids'] on the scraper); when present it
+        # narrows the result set dramatically so eBay's AND-on-query-words
+        # behavior doesn't bury our listings past the page-size cutoff.
+        # When absent, falls back to an unfiltered keyword search — fine
+        # for the cars hunt today (volume manageable, central reject-keywords
+        # + USD floor cull noise), but should be revisited per-search.
         params = {
             "q": self.query,
             "sort": "newlyListed",
             "limit": "200",
         }
+        if category_id:
+            params["category_ids"] = category_id
         max_pages = int(self.config.get("max_pages", 5))
         listings: List[Listing] = []
         offset = 0
