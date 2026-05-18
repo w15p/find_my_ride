@@ -318,16 +318,51 @@ sites:
     enabled: true
     profile_dir: ".fb_profile"         # run `python run.py --fb-login` once to authenticate
     search_radius_km: 500
+    # 23-anchor coverage map. FB's marketplace search is location-radius-bound,
+    # so a single search misses most of Europe. The previous 9-anchor set was
+    # NW-Europe-heavy (London/Amsterdam/Brussels/Paris cluster) and left
+    # Scandinavia, eastern Europe, most of Italy, and northern UK uncovered —
+    # LHD Escorts in Portugal surfaced, but cars in Sweden or Poland never did.
+    #
+    # This set is verified gap-free against 48 probe cities (Inverness to
+    # Crete, Galway to Chișinău) — every probe is within 500km of at least
+    # one anchor. Overlap is intentional: FB's per-search result cap (~36)
+    # means a single anchor can't return everything in its radius, so we
+    # want multiple shots at each region. Cost: ~12min of pure search time
+    # per FB scrape (23 × ~30s with throttling), expect total FB cron tick
+    # to land around 40-60min.
     locations:
-      - {name: "London",    lat: 51.5074, lng:  -0.1278}
-      - {name: "Amsterdam", lat: 52.3676, lng:   4.9041}
-      - {name: "Hamburg",   lat: 53.5753, lng:  10.0153}
-      - {name: "Brussels",  lat: 50.8503, lng:   4.3517}
-      - {name: "Paris",     lat: 48.8566, lng:   2.3522}
-      - {name: "Porto",     lat: 41.1579, lng:  -8.6291}
-      - {name: "Lisbon",    lat: 38.7169, lng:  -9.1395}
-      - {name: "Madrid",    lat: 40.4168, lng:  -3.7038}
-      - {name: "Barcelona", lat: 41.3851, lng:   2.1734}
+      # British Isles
+      - {name: "Dublin",     lat: 53.3498, lng:  -6.2603}
+      - {name: "Edinburgh",  lat: 55.9533, lng:  -3.1883}
+      - {name: "London",     lat: 51.5074, lng:  -0.1278}
+      # Iberia — high-density market for LHD Escorts
+      - {name: "Lisbon",     lat: 38.7169, lng:  -9.1395}
+      - {name: "Porto",      lat: 41.1579, lng:  -8.6291}
+      - {name: "Madrid",     lat: 40.4168, lng:  -3.7038}
+      # France / Benelux
+      - {name: "Paris",      lat: 48.8566, lng:   2.3522}
+      - {name: "Amsterdam",  lat: 52.3676, lng:   4.9041}
+      - {name: "Lyon",       lat: 45.7640, lng:   4.8357}
+      - {name: "Toulouse",   lat: 43.6047, lng:   1.4442}
+      # Italy
+      - {name: "Milan",      lat: 45.4642, lng:   9.1900}
+      - {name: "Rome",       lat: 41.9028, lng:  12.4964}
+      # DACH / central Europe
+      - {name: "Munich",     lat: 48.1351, lng:  11.5820}
+      - {name: "Berlin",     lat: 52.5200, lng:  13.4050}
+      - {name: "Vienna",     lat: 48.2082, lng:  16.3738}
+      # Scandinavia
+      - {name: "Copenhagen", lat: 55.6761, lng:  12.5683}
+      - {name: "Stockholm",  lat: 59.3293, lng:  18.0686}
+      - {name: "Oslo",       lat: 59.9139, lng:  10.7522}
+      # Eastern Europe
+      - {name: "Warsaw",     lat: 52.2297, lng:  21.0122}
+      - {name: "Budapest",   lat: 47.4979, lng:  19.0402}
+      - {name: "Bucharest",  lat: 44.4268, lng:  26.1025}
+      # Balkans / Greece
+      - {name: "Sofia",      lat: 42.6977, lng:  23.3219}
+      - {name: "Athens",     lat: 37.9838, lng:  23.7275}
 
 # ─── Notifications ────────────────────────────────────────────────────────────
 notification:
