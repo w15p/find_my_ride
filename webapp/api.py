@@ -62,6 +62,11 @@ class OverrideBody(BaseModel):
     price_currency: Optional[str] = None
 
 
+class WatchedAddBody(BaseModel):
+    search_id: int
+    url: str
+
+
 
 from core.countries import enhance_location
 from core.currency import format_price, usd_value
@@ -414,6 +419,60 @@ def create_app() -> FastAPI:
             if ccy not in allowed:
                 raise HTTPException(400, f"price_currency must be one of {sorted(allowed)}")
             db.set_user_field(body.url, "user_price_currency", ccy)
+        return {"ok": True}
+
+    # ── Watched URLs (fetched directly each cron tick, bypass search) ────────
+
+    @app.get("/api/watched")
+    def list_watched(search_id: Optional[int] = None):
+        """List watched URLs, optionally filtered by search_id.
+
+        Joins with `listings` so the UI can show whether the URL has
+        already been pulled in (and its title/price if so).
+        """
+        db = get_db()
+        clauses, params = [], []
+        if search_id is not None:
+            clauses.append("w.search_id = ?")
+            params.append(search_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = db.conn.execute(
+            f"""SELECT w.id, w.search_id, w.url, w.added_at,
+                       w.last_fetched_at, w.last_status,
+                       l.title AS listing_title,
+                       l.price AS listing_price,
+                       l.image_url AS listing_image_url,
+                       l.status AS listing_status
+                FROM watched_urls w
+                LEFT JOIN listings l ON l.url = w.url
+                {where}
+                ORDER BY w.id DESC""",
+            tuple(params),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @app.post("/api/watched")
+    def add_watched(body: WatchedAddBody = Body(...)):
+        url = body.url.strip()
+        if not url.startswith(("http://", "https://")):
+            raise HTTPException(400, "url must be http(s)")
+        db = get_db()
+        exists = db.conn.execute(
+            "SELECT 1 FROM searches WHERE id = ?", (body.search_id,)
+        ).fetchone()
+        if not exists:
+            raise HTTPException(404, f"search_id {body.search_id} not found")
+        watched_id = db.add_watched_url(body.search_id, url)
+        if watched_id is None:
+            raise HTTPException(409, "url already watched for this search")
+        return {"ok": True, "id": watched_id}
+
+    @app.delete("/api/watched/{watched_id}")
+    def delete_watched(watched_id: int):
+        db = get_db()
+        ok = db.remove_watched_url(watched_id)
+        if not ok:
+            raise HTTPException(404, f"watched_id {watched_id} not found")
         return {"ok": True}
 
     # ── Static file serving for the built React app ──────────────────────────
