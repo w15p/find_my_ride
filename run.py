@@ -475,6 +475,30 @@ def _fb_profile_dir(cfg: dict) -> str:
 _FB_SOLD_LINE = re.compile(r"^Sold\s*$", re.MULTILINE)
 
 
+def cmd_mine_suggestions(cfg: dict, db: ListingDB, search_slug: Optional[str] = None) -> None:
+    """Run the Tier 1 pattern miner; writes to the suggestions table.
+
+    Without --search-slug, mines every search. Idempotent — duplicate
+    suggestions (same search_id + kind + value) silently no-op via the
+    UNIQUE constraint on the suggestions table.
+    """
+    from core.miner import mine_for_search, mine_all_searches
+    log = logging.getLogger("mine")
+    if search_slug:
+        row = db.conn.execute(
+            "SELECT id FROM searches WHERE slug = ?", (search_slug,)
+        ).fetchone()
+        if not row:
+            log.error("Unknown search slug %r — nothing to mine.", search_slug)
+            return
+        counts = mine_for_search(db, row["id"])
+        log.info("Mined %r: %s", search_slug, counts)
+    else:
+        results = mine_all_searches(db)
+        for slug, counts in results.items():
+            log.info("Mined %r: %s", slug, counts)
+
+
 def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
     """Re-fetch the hero image URL for every active Facebook listing.
 
@@ -790,9 +814,11 @@ def main() -> None:
                         help="Hours window for --send-digest (default: 24)")
     parser.add_argument("--skip-validate", action="store_true",
                         help="With --send-digest: skip the pre-digest validation pass")
-    parser.add_argument("--search-slug", default=_DEFAULT_SEARCH_SLUG,
+    parser.add_argument("--search-slug", default=None,
                         help="With --send-digest: which saved search to digest "
-                             f"(default: {_DEFAULT_SEARCH_SLUG})")
+                             f"(default: {_DEFAULT_SEARCH_SLUG}). "
+                             "With --mine-suggestions: which search to mine "
+                             "(default: all searches).")
     parser.add_argument("--list-db", action="store_true",
                         help="Print last 50 stored listings")
     parser.add_argument("--validate", action="store_true",
@@ -804,6 +830,10 @@ def main() -> None:
     parser.add_argument("--refresh-fb-images", action="store_true",
                         help="Re-fetch image URLs for active Facebook listings "
                              "(FB CDN URLs expire after ~24-48h)")
+    parser.add_argument("--mine-suggestions", action="store_true",
+                        help="Run the pattern miner over rejects + keeps for "
+                             "every search (or just --search-slug if given). "
+                             "Writes to the suggestions table for UI review.")
     parser.add_argument("--config", default="config/config.yaml",
                         help="Path to config.yaml (default: config/config.yaml)")
     args = parser.parse_args()
@@ -829,6 +859,11 @@ def main() -> None:
         cmd_refresh_fb_images(cfg, db)
         return
 
+    if args.mine_suggestions:
+        # No slug = mine all searches; slug = mine just that one.
+        cmd_mine_suggestions(cfg, db, search_slug=args.search_slug)
+        return
+
     if args.validate:
         run_validate(cfg, db)
         return
@@ -838,7 +873,7 @@ def main() -> None:
             cfg, db,
             hours=args.hours,
             skip_validate=args.skip_validate,
-            search_slug=args.search_slug,
+            search_slug=args.search_slug or _DEFAULT_SEARCH_SLUG,
         )
         return
 
