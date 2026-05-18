@@ -91,3 +91,24 @@ export async function setOverride(url, fields) {
     })
   );
 }
+
+export async function fetchWatched(searchId) {
+  const qs = searchId != null ? `?search_id=${searchId}` : "";
+  return jsonOrThrow(await fetch(`${BASE}/api/watched${qs}`));
+}
+
+export async function addWatched(searchId, url) {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/watched`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ search_id: searchId, url }),
+    })
+  );
+}
+
+export async function removeWatched(watchedId) {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/watched/${watchedId}`, { method: "DELETE" })
+  );
+}

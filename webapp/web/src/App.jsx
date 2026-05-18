@@ -3,6 +3,7 @@ import * as api from "./api.js";
 import { ListingCard } from "./components/ListingCard.jsx";
 import { FilterBar } from "./components/FilterBar.jsx";
 import { SearchSwitcher } from "./components/SearchSwitcher.jsx";
+import { WatchedUrlsPanel } from "./components/WatchedUrlsPanel.jsx";
 
 const DEFAULT_FILTERS = {
   status: "active",
@@ -147,6 +148,8 @@ export default function App() {
           onReset={() => setFilters(DEFAULT_FILTERS)}
         />
       </header>
+
+      <WatchedUrlsPanel searchId={searchId} />
 
       {error && (
         <div className="bg-red-100 border border-red-400 text-red-800 px-4 py-2 m-4 rounded">
