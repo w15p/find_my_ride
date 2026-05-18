@@ -102,12 +102,26 @@ CREATE TABLE IF NOT EXISTS suggestions (
     resolved_at     TEXT,
     UNIQUE (search_id, kind, value_json)
 );
+
+-- Watched URLs: bypass search-recall failures by fetching specific listings
+-- directly each cron tick. Used when FB suppresses a listing from search
+-- (e.g. cross-region location mismatch) but it's still reachable by URL.
+CREATE TABLE IF NOT EXISTS watched_urls (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    search_id       INTEGER NOT NULL REFERENCES searches(id),
+    url             TEXT    NOT NULL,
+    added_at        TEXT    NOT NULL,
+    last_fetched_at TEXT,
+    last_status     TEXT,    -- ok | filtered | fetch_failed | unsupported_site
+    UNIQUE (search_id, url)
+);
 """
 
 _STRUCTURAL_MIGRATION_ID = "001_search_split"
 _SEATS_SEARCH_MIGRATION_ID = "002_seats_search"
 _ORPHAN_BACKFILL_MIGRATION_ID = "003_orphan_backfill"
 _PATTERN_MINER_MIGRATION_ID = "004_pattern_miner"
+_WATCHED_URLS_MIGRATION_ID = "005_watched_urls"
 _DEFAULT_SEARCH_SLUG = "escort_mk1_lhd"
 _DEFAULT_SEARCH_LABEL = "Ford Escort Mk1 LHD"
 _DEFAULT_TENANT_ID = "default"
@@ -257,6 +271,7 @@ class ListingDB:
             self._migrate_seats_search()
             self._migrate_orphan_backfill()
             self._migrate_pattern_miner()
+            self._migrate_watched_urls()
             return
 
         now = datetime.utcnow().isoformat()
@@ -312,6 +327,7 @@ class ListingDB:
         self._migrate_seats_search()
         self._migrate_orphan_backfill()
         self._migrate_pattern_miner()
+        self._migrate_watched_urls()
 
     def _migrate_seats_search(self) -> None:
         """Seed the `searches` row for the RS2000 / Mexico seats hunt.
@@ -398,6 +414,24 @@ class ListingDB:
         self.conn.execute(
             "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
             (_PATTERN_MINER_MIGRATION_ID, datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
+    def _migrate_watched_urls(self) -> None:
+        """Gate marker for the watched_urls table.
+
+        DDL lives in SCHEMA_SEARCHES (CREATE TABLE IF NOT EXISTS); this
+        migration just records the gate. Pattern matches 004.
+        """
+        already = self.conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE id = ?",
+            (_WATCHED_URLS_MIGRATION_ID,),
+        ).fetchone()
+        if already:
+            return
+        self.conn.execute(
+            "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+            (_WATCHED_URLS_MIGRATION_ID, datetime.utcnow().isoformat()),
         )
         self.conn.commit()
 
@@ -519,6 +553,52 @@ class ListingDB:
         self.conn.execute(
             "UPDATE suggestions SET status=?, resolved_at=? WHERE id=?",
             (status, datetime.utcnow().isoformat(), suggestion_id),
+        )
+        self.conn.commit()
+
+    # ── watched_urls helpers ──────────────────────────────────────────────────
+
+    def add_watched_url(self, search_id: int, url: str) -> Optional[int]:
+        """Add a watched URL for a search. Returns the new row id, or None
+        if the (search_id, url) pair is already being watched."""
+        try:
+            cur = self.conn.execute(
+                "INSERT INTO watched_urls (search_id, url, added_at) VALUES (?, ?, ?)",
+                (search_id, url, datetime.utcnow().isoformat()),
+            )
+            self.conn.commit()
+            return cur.lastrowid
+        except sqlite3.IntegrityError:
+            return None
+
+    def list_watched_urls(
+        self,
+        search_id: Optional[int] = None,
+    ) -> List[sqlite3.Row]:
+        """List watched URLs, optionally scoped to one search."""
+        if search_id is None:
+            sql = "SELECT * FROM watched_urls ORDER BY id DESC"
+            params: tuple = ()
+        else:
+            sql = "SELECT * FROM watched_urls WHERE search_id = ? ORDER BY id DESC"
+            params = (search_id,)
+        return self.conn.execute(sql, params).fetchall()
+
+    def remove_watched_url(self, watched_id: int) -> bool:
+        """Delete a watched URL by id. Returns True if a row was removed."""
+        cur = self.conn.execute(
+            "DELETE FROM watched_urls WHERE id = ?", (watched_id,),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    def mark_watched_url_fetched(self, watched_id: int, status: str) -> None:
+        """Record the outcome of the most recent fetch attempt for a
+        watched URL. `status` is free-form text but conventionally one of
+        ok | filtered | fetch_failed | unsupported_site."""
+        self.conn.execute(
+            "UPDATE watched_urls SET last_fetched_at=?, last_status=? WHERE id=?",
+            (datetime.utcnow().isoformat(), status, watched_id),
         )
         self.conn.commit()
 
