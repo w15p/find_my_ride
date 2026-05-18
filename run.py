@@ -688,11 +688,32 @@ def _row_to_listing(r) -> Listing:
     )
 
 
-def cmd_send_digest(cfg: dict, db: ListingDB, hours: int = 24, skip_validate: bool = False) -> None:
+def cmd_send_digest(
+    cfg: dict,
+    db: ListingDB,
+    hours: int = 24,
+    skip_validate: bool = False,
+    search_slug: str = _DEFAULT_SEARCH_SLUG,
+) -> None:
     log = logging.getLogger("digest")
+
+    # Resolve the search slug to id + label up front. A missing row almost
+    # certainly means the migration didn't run or the slug was mistyped on
+    # the CLI; bail cleanly rather than send an empty email.
+    search_row = db.conn.execute(
+        "SELECT id, label FROM searches WHERE slug = ?", (search_slug,)
+    ).fetchone()
+    if not search_row:
+        log.error("Unknown search slug %r — nothing to digest.", search_slug)
+        return
+    search_id = search_row["id"]
+    search_label = search_row["label"]
+
     # Always sanity-check active listings before sending so stale rows can't
     # reach the inbox. This makes the digest order-independent from cron;
-    # whichever schedule fires first, the user gets fresh data.
+    # whichever schedule fires first, the user gets fresh data. Validation is
+    # search-agnostic (sold is sold regardless of which search a listing
+    # belongs to) so we don't filter it by search_id.
     if not skip_validate:
         log.info("Pre-digest validation pass starting")
         try:
@@ -701,9 +722,12 @@ def cmd_send_digest(cfg: dict, db: ListingDB, hours: int = 24, skip_validate: bo
             log.warning("Pre-digest validation failed (continuing with digest): %s", exc)
 
     since = datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=hours)
-    rows = db.canonical_listings_since(since)
+    rows = db.canonical_listings_since(since, search_id=search_id)
     if not rows:
-        log.info("No active canonical listings in the last %dh — nothing to send.", hours)
+        log.info(
+            "No active canonical listings for %r in the last %dh — nothing to send.",
+            search_slug, hours,
+        )
         return
 
     listings = [_row_to_listing(r) for r in rows]
@@ -712,13 +736,6 @@ def cmd_send_digest(cfg: dict, db: ListingDB, hours: int = 24, skip_validate: bo
         dups = db.duplicates_of(r["url"])
         if dups:
             duplicates_by_canonical[r["url"]] = [_row_to_listing(d) for d in dups]
-
-    # Read the search label from the DB so the digest email reflects the actual
-    # saved-search name rather than a hardcoded string.
-    search_row = db.conn.execute(
-        "SELECT label FROM searches WHERE slug = ?", (_DEFAULT_SEARCH_SLUG,)
-    ).fetchone()
-    search_label = search_row["label"] if search_row else _DEFAULT_SEARCH_LABEL
 
     notif_cfg = cfg.get("notification", {})
     if notif_cfg.get("type") == "email":
@@ -767,6 +784,9 @@ def main() -> None:
                         help="Hours window for --send-digest (default: 24)")
     parser.add_argument("--skip-validate", action="store_true",
                         help="With --send-digest: skip the pre-digest validation pass")
+    parser.add_argument("--search-slug", default=_DEFAULT_SEARCH_SLUG,
+                        help="With --send-digest: which saved search to digest "
+                             f"(default: {_DEFAULT_SEARCH_SLUG})")
     parser.add_argument("--list-db", action="store_true",
                         help="Print last 50 stored listings")
     parser.add_argument("--validate", action="store_true",
@@ -808,7 +828,12 @@ def main() -> None:
         return
 
     if args.send_digest:
-        cmd_send_digest(cfg, db, hours=args.hours, skip_validate=args.skip_validate)
+        cmd_send_digest(
+            cfg, db,
+            hours=args.hours,
+            skip_validate=args.skip_validate,
+            search_slug=args.search_slug,
+        )
         return
 
     all_new = run_scrape(args, cfg, db)

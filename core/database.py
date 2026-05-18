@@ -481,10 +481,17 @@ class ListingDB:
             (since.isoformat(),),
         ).fetchall()
 
-    def canonical_listings_since(self, since: datetime) -> List[sqlite3.Row]:
-        """Return canonical (non-duplicate), active, not-user-rejected listings."""
+    def canonical_listings_since(
+        self, since: datetime, search_id: Optional[int] = None
+    ) -> List[sqlite3.Row]:
+        """Return canonical (non-duplicate), active, not-user-rejected listings.
+
+        When `search_id` is set, restrict to listings matched under that
+        saved search (per-search digest path). When None, return across all
+        searches — used only if a caller hasn't been converted yet.
+        """
         return self.conn.execute(
-            f"""{listings_select_sql()}
+            f"""{listings_select_sql(search_id=search_id)}
                 WHERE l.scraped_at >= ?
                   AND l.status = 'active'
                   AND l.canonical_url IS NULL
