@@ -201,8 +201,38 @@ searches:
       # Seats don't have meaningful years; skip the cars-style year window.
       year_from: null
       year_to: null
-      # Start empty; add specific rejects after seeing first-scrape noise.
-      reject_title_keywords: []
+      # Seeded from the first scrape's manual rejections (all evidenced as
+      # rejected, zero kept). Each phrase intentionally specific enough that
+      # it doesn't collateral-damage seat-cover or full-interior-set listings.
+      # The pattern miner (Tier 1) will suggest more over time.
+      reject_title_keywords:
+        # Seat belts — the loudest noise class on eBay (4 prior rejects)
+        - "seat belt"
+        - "seatbelt"
+        # Hard mounting / structural parts (multiple prior rejects)
+        - "crossmember"
+        - "cross member"
+        - "sitz querträger"       # German equivalent
+        - "seat bracket"
+        - "seat hinge"
+        - "seat bolt"
+        - "seat mount"
+        # Decorative / trim parts that match "seat" but aren't the seat itself
+        - "seat badge"
+        - "tilt handle"
+        # Non-seat interior parts
+        - "centre console"
+        - "center console"
+        - "dash top"
+        # Deliberately NOT in this list (would false-positive on legitimate
+        # seats listings):
+        #   "base foam"  — catches "Roll Top Seat Cover ... New Base Foams"
+        #                  which is exactly the kind of seat-cover the user
+        #                  wants to review
+        #   "door card"  — full-interior-set listings often include door
+        #                  cards alongside seats (legit lot purchases)
+        #   "carpet" / "headlining" / "dashboard" — same risk as door card
+        #   "seat runner" — sometimes appears in legit listings; punt to miner
 
 # ─── Review UI (--serve-web) ──────────────────────────────────────────────────
 # Reasons that show up in the reject dropdown on the React review app.
