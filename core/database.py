@@ -78,11 +78,36 @@ CREATE TABLE IF NOT EXISTS tenant_listing_state (
     user_price_currency TEXT,
     PRIMARY KEY (tenant_id, listing_url)
 );
+
+-- Tier 1 pattern-miner tables --------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS search_overrides (
+    search_id              INTEGER NOT NULL REFERENCES searches(id),
+    reject_keywords_json   TEXT    NOT NULL DEFAULT '[]',
+    skipped_sites_json     TEXT    NOT NULL DEFAULT '[]',
+    min_price_usd_override INTEGER,
+    max_price_usd_override INTEGER,
+    updated_at             TEXT    NOT NULL,
+    PRIMARY KEY (search_id)
+);
+
+CREATE TABLE IF NOT EXISTS suggestions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    search_id       INTEGER NOT NULL REFERENCES searches(id),
+    kind            TEXT    NOT NULL,    -- reject_keyword | skip_site | adjust_price_floor
+    value_json      TEXT    NOT NULL,    -- e.g. '"centre console"' or '"autoscout24"' or '500'
+    evidence_json   TEXT    NOT NULL,    -- {reject_count, keep_count, reject_rate, examples}
+    status          TEXT    NOT NULL DEFAULT 'pending',  -- pending | accepted | dismissed
+    suggested_at    TEXT    NOT NULL,
+    resolved_at     TEXT,
+    UNIQUE (search_id, kind, value_json)
+);
 """
 
 _STRUCTURAL_MIGRATION_ID = "001_search_split"
 _SEATS_SEARCH_MIGRATION_ID = "002_seats_search"
 _ORPHAN_BACKFILL_MIGRATION_ID = "003_orphan_backfill"
+_PATTERN_MINER_MIGRATION_ID = "004_pattern_miner"
 _DEFAULT_SEARCH_SLUG = "escort_mk1_lhd"
 _DEFAULT_SEARCH_LABEL = "Ford Escort Mk1 LHD"
 _DEFAULT_TENANT_ID = "default"
@@ -231,6 +256,7 @@ class ListingDB:
             # short-circuiting. Each subsequent migration owns its own gate.
             self._migrate_seats_search()
             self._migrate_orphan_backfill()
+            self._migrate_pattern_miner()
             return
 
         now = datetime.utcnow().isoformat()
@@ -285,6 +311,7 @@ class ListingDB:
 
         self._migrate_seats_search()
         self._migrate_orphan_backfill()
+        self._migrate_pattern_miner()
 
     def _migrate_seats_search(self) -> None:
         """Seed the `searches` row for the RS2000 / Mexico seats hunt.
@@ -353,6 +380,147 @@ class ListingDB:
         except Exception:
             self.conn.execute("ROLLBACK")
             raise
+
+    def _migrate_pattern_miner(self) -> None:
+        """Gate marker for the Tier 1 pattern-miner tables.
+
+        The DDL itself lives in SCHEMA_SEARCHES (runs every startup via
+        CREATE TABLE IF NOT EXISTS — safe to declare unconditionally). This
+        migration just records that we're "on" 004 so future code can
+        branch on `applied_at` from schema_migrations if needed.
+        """
+        already = self.conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE id = ?",
+            (_PATTERN_MINER_MIGRATION_ID,),
+        ).fetchone()
+        if already:
+            return
+        self.conn.execute(
+            "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+            (_PATTERN_MINER_MIGRATION_ID, datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
+    # ── search_overrides helpers ──────────────────────────────────────────────
+
+    def get_search_override(self, search_id: int) -> dict:
+        """Return the override row for a search as a dict with parsed JSON
+        fields. Returns an empty-equivalent dict if no row exists yet —
+        caller can treat that as "no overrides applied"."""
+        import json as _json
+        row = self.conn.execute(
+            "SELECT * FROM search_overrides WHERE search_id = ?",
+            (search_id,),
+        ).fetchone()
+        if not row:
+            return {
+                "reject_keywords": [],
+                "skipped_sites": [],
+                "min_price_usd_override": None,
+                "max_price_usd_override": None,
+            }
+        return {
+            "reject_keywords": _json.loads(row["reject_keywords_json"] or "[]"),
+            "skipped_sites": _json.loads(row["skipped_sites_json"] or "[]"),
+            "min_price_usd_override": row["min_price_usd_override"],
+            "max_price_usd_override": row["max_price_usd_override"],
+        }
+
+    def upsert_search_override(
+        self,
+        search_id: int,
+        *,
+        reject_keywords: Optional[List[str]] = None,
+        skipped_sites: Optional[List[str]] = None,
+        min_price_usd: Optional[int] = None,
+        max_price_usd: Optional[int] = None,
+    ) -> None:
+        """Upsert override fields for a search. Any None argument leaves the
+        existing value in place (does not blank it). Use empty list/0 to
+        explicitly clear a list/value."""
+        import json as _json
+        current = self.get_search_override(search_id)
+        new_kws = reject_keywords if reject_keywords is not None else current["reject_keywords"]
+        new_sites = skipped_sites if skipped_sites is not None else current["skipped_sites"]
+        new_min = min_price_usd if min_price_usd is not None else current["min_price_usd_override"]
+        new_max = max_price_usd if max_price_usd is not None else current["max_price_usd_override"]
+        self.conn.execute(
+            """INSERT INTO search_overrides
+                   (search_id, reject_keywords_json, skipped_sites_json,
+                    min_price_usd_override, max_price_usd_override, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT (search_id) DO UPDATE SET
+                   reject_keywords_json   = excluded.reject_keywords_json,
+                   skipped_sites_json     = excluded.skipped_sites_json,
+                   min_price_usd_override = excluded.min_price_usd_override,
+                   max_price_usd_override = excluded.max_price_usd_override,
+                   updated_at             = excluded.updated_at""",
+            (
+                search_id,
+                _json.dumps(new_kws),
+                _json.dumps(new_sites),
+                new_min,
+                new_max,
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        self.conn.commit()
+
+    # ── suggestions helpers ───────────────────────────────────────────────────
+
+    def insert_suggestion(
+        self,
+        search_id: int,
+        kind: str,
+        value: object,
+        evidence: dict,
+    ) -> Optional[int]:
+        """Insert a suggestion if not already present (UNIQUE on
+        search_id+kind+value_json). Returns the new id, or None if it
+        already existed (in any status — dismissed/accepted/pending)."""
+        import json as _json
+        try:
+            cur = self.conn.execute(
+                """INSERT INTO suggestions
+                       (search_id, kind, value_json, evidence_json,
+                        status, suggested_at)
+                   VALUES (?, ?, ?, ?, 'pending', ?)""",
+                (
+                    search_id, kind,
+                    _json.dumps(value),
+                    _json.dumps(evidence),
+                    datetime.utcnow().isoformat(),
+                ),
+            )
+            self.conn.commit()
+            return cur.lastrowid
+        except sqlite3.IntegrityError:
+            return None
+
+    def list_suggestions(
+        self,
+        search_id: Optional[int] = None,
+        status: str = "pending",
+    ) -> List[sqlite3.Row]:
+        """List suggestions, optionally scoped to a search and status."""
+        clauses, params = ["status = ?"], [status]
+        if search_id is not None:
+            clauses.append("search_id = ?"); params.append(search_id)
+        sql = (
+            "SELECT * FROM suggestions WHERE " + " AND ".join(clauses)
+            + " ORDER BY id DESC"
+        )
+        return self.conn.execute(sql, tuple(params)).fetchall()
+
+    def resolve_suggestion(self, suggestion_id: int, status: str) -> None:
+        """Mark a suggestion as accepted or dismissed; records resolved_at."""
+        if status not in ("accepted", "dismissed"):
+            raise ValueError(f"bad suggestion status: {status}")
+        self.conn.execute(
+            "UPDATE suggestions SET status=?, resolved_at=? WHERE id=?",
+            (status, datetime.utcnow().isoformat(), suggestion_id),
+        )
+        self.conn.commit()
 
     def filter_new(self, listings: List[Listing], search_id: int = 1) -> List[Listing]:
         """Return only listings that don't yet match the given search.
