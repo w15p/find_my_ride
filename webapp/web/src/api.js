@@ -10,11 +10,16 @@ async function jsonOrThrow(resp) {
   return resp.json();
 }
 
-export async function fetchListings(filters) {
+export async function fetchSearches() {
+  return jsonOrThrow(await fetch(`${BASE}/api/searches`));
+}
+
+export async function fetchListings(filters, searchId) {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(filters)) {
     if (v !== "" && v !== null && v !== undefined) qs.set(k, v);
   }
+  if (searchId != null) qs.set("search_id", searchId);
   return jsonOrThrow(await fetch(`${BASE}/api/listings?${qs.toString()}`));
 }
 
