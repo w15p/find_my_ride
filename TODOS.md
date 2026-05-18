@@ -28,6 +28,20 @@ Low-pri (user explicitly flagged). Currently `/api/config/reasons` returns a glo
 
 In `core/miner.py` `_mine_skip_sites`: doesn't currently skip suggesting a site that's already in `search_overrides.skipped_sites_json`. Same pattern as `_existing_rejects` for `_mine_reject_keywords`. ~5 lines. Do before M3 ships so accepted skip-site suggestions don't get re-suggested.
 
+## `--search-slug` doesn't filter `run_scrape`
+
+`args.search_slug` is honored by `cmd_mine_suggestions` and `cmd_send_digest` but `run_scrape` ignores it — it iterates the whole `searches_cfg` dict. Caught when running `python run.py --search-slug escort_mk1_lhd --sites facebook` also ran the seats hunt FB scraper. Fix: filter `searches_cfg` by `args.search_slug` at the top of `run_scrape` (the same way the inner site loop filters by `args.sites`). ~5 lines.
+
+## AWS migration (research in progress)
+
+Goal: move find_my_ride off the local Mac to AWS. Currently using a launchd LaunchAgent + cron for persistence — fine as a stopgap but not the long-term home. User owns a domain for DNS. Cloud-architect + security-engineer agents dispatched 2026-05-18 to recommend architecture. Open questions to be resolved by their output:
+
+- EC2 single-VM vs ECS Fargate vs Lightsail (Playwright + persistent FB profile dir constrains this)
+- RDS Postgres vs SQLite-on-EBS (current is SQLite; multi-tenant transition would push toward Postgres)
+- Route53 + ACM + ALB/CloudFront for the domain
+- Secrets management for EBAY/SMTP/MARKTPLAATS creds (currently `.env`)
+- Estimated monthly cost at low (single-user) and projected (small SaaS) traffic
+
 ## Tier 2 (parked)
 
 - Ranking model — once Tier 1 saturates (most obvious patterns caught), build a per-search logistic regression / GBT over listing features → P(reject). Sort UI by P(keep) DESC. Wait until you have 100+ rejects per search for useful signal.
