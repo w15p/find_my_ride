@@ -447,7 +447,71 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
 
             all_new.extend(new)
 
+        # Watched URLs phase — fetch any URLs the user has pinned for this
+        # search directly via the per-site detail fetcher, bypassing the
+        # site's marketplace search. Catches listings that search silently
+        # suppresses (e.g. FB cross-region location mismatch).
+        watched_new = _process_watched_urls(args, cfg, db, slug, search_id, log)
+        all_new.extend(watched_new)
+
     return all_new
+
+
+def _process_watched_urls(
+    args, cfg: dict, db: ListingDB, slug: str, search_id: int, log,
+) -> list[Listing]:
+    """Fetch all watched URLs for a search, dispatch by site, save results.
+
+    Returns the list of newly-saved Listings so the caller can fold them
+    into all_new. Watched URLs intentionally bypass save-time filters
+    (`_should_keep`, title match) — the user has explicitly opted in by
+    pinning the URL, so filters from search-discovery don't apply.
+    """
+    rows = db.list_watched_urls(search_id=search_id)
+    if not rows:
+        return []
+
+    fb_urls: list[str] = []
+    fb_id_by_url: dict[str, int] = {}
+    for row in rows:
+        url = row["url"]
+        if "facebook.com/marketplace" in url:
+            fb_urls.append(url)
+            fb_id_by_url[url] = row["id"]
+        else:
+            db.mark_watched_url_fetched(row["id"], "unsupported_site")
+            log.info("  Watched URL site not yet supported: %s", url)
+
+    if not fb_urls:
+        return []
+
+    log.info("=== Watched URLs (search=%s): fetching %d FB URL(s) ===",
+             slug, len(fb_urls))
+
+    from scrapers.facebook import fetch_watched_listings
+    profile_dir = _fb_profile_dir(cfg)
+    fetched = fetch_watched_listings(fb_urls, profile_dir, log)
+
+    new_listings: list[Listing] = []
+    for url, listing, status in fetched:
+        watched_id = fb_id_by_url[url]
+        db.mark_watched_url_fetched(watched_id, status)
+        if not listing:
+            log.info("  Watched fetch failed: %s", url)
+            continue
+        # Already in DB and tagged with this search? Skip silently — the
+        # watched URL is still useful as a retry-on-future-suppression
+        # safety net, but we don't double-process listings.
+        existing = db.filter_new([listing], search_id=search_id)
+        if not existing:
+            log.debug("  Watched URL already tracked: %s", url)
+            continue
+        if not args.check_only:
+            db.save([listing], search_id=search_id)
+        new_listings.append(listing)
+        log.info("  Watched URL captured: %s — %s", url, listing.title[:60])
+
+    return new_listings
 
 
 def _has_word_boundary_signal(body_lower: str, sig: str) -> bool:

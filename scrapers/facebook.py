@@ -163,76 +163,141 @@ class FacebookScraper(BaseScraper):
             return None
 
     def _build_listing(self, data: dict, url: str) -> Optional[Listing]:
-        try:
-            title = (
-                data.get("marketplace_listing_title")
-                or data.get("custom_title")
-                or data.get("name")
-                or ""
-            )
-            if not self.title_matches_search(title):
-                return None
-
-            desc = data.get("description") or data.get("redacted_description", {}).get("text", "") or ""
-
-            # Year — title first, then description.
-            year = _extract_any_year(title) or _extract_any_year(desc)
-
-            # Steering — detect LHD keyword; don't hard-reject unknowns.
-            combined = (title + " " + desc).lower()
-            steering = "lhd" if any(kw in combined for kw in LHD_KEYWORDS) else "unknown"
-
-            # Price
-            price_obj = data.get("listing_price") or {}
-            amount_str = price_obj.get("amount") or price_obj.get("amount_with_offset")
-            currency = price_obj.get("currency")
-            raw_price = None
-            price_val = None
-            if amount_str:
-                try:
-                    price_val = int(float(amount_str) * 100)
-                    symbol = {"EUR": "€", "GBP": "£", "USD": "$"}.get(currency, currency or "")
-                    raw_price = f"{symbol}{float(amount_str):,.0f}"
-                except (ValueError, TypeError):
-                    pass
-            else:
-                self.log.info("Facebook listing without price: %s — %s", url, title[:60])
-
-            # Location — prefer FB's `display_name` (e.g. "Maia, Porto,
-            # Portugal") because it's richer than just the city. Fall back to
-            # bare city + ISO country.
-            loc_obj = data.get("location") or {}
-            display = loc_obj.get("display_name")
-            city = loc_obj.get("city") or loc_obj.get("reverse_geocode", {}).get("city") or ""
-            country = loc_obj.get("country_code") or country_from_display(display)
-            location_str = display or (", ".join(filter(None, [city, (country or "").upper()])) or None)
-
-            image_url = data.get("_image_url")
-
-            # Trim description: collapse whitespace; cap at 1000 chars (the digest
-            # template truncates to ~280 — keep the rest for debugging in DB).
-            description = re.sub(r"\s+", " ", desc).strip()[:1000] or None
-
-            return Listing(
-                url=url,
-                site_name=self.site_name,
-                title=title,
-                price=raw_price,
-                price_value=price_val,
-                price_currency=currency,
-                year=year,
-                location=location_str,
-                country_code=country.upper() or None,
-                image_url=image_url,
-                steering=steering,
-                description=description,
-            )
-        except Exception as exc:
-            self.log.debug("Facebook listing build error: %s", exc)
+        title = (
+            data.get("marketplace_listing_title")
+            or data.get("custom_title")
+            or data.get("name")
+            or ""
+        )
+        if not self.title_matches_search(title):
             return None
+        return _build_listing_from_relay(data, url, self.log)
 
 
 # ------------------------------------------------------------------ helpers
+
+def _build_listing_from_relay(data: dict, url: str, log) -> Optional[Listing]:
+    """Build a Listing from FB Relay payload data. No title filter — that's
+    the caller's responsibility. Shared by the search-path scraper and the
+    watched-URL fetcher (which intentionally skips the filter)."""
+    try:
+        title = (
+            data.get("marketplace_listing_title")
+            or data.get("custom_title")
+            or data.get("name")
+            or ""
+        )
+        desc = data.get("description") or data.get("redacted_description", {}).get("text", "") or ""
+
+        year = _extract_any_year(title) or _extract_any_year(desc)
+
+        combined = (title + " " + desc).lower()
+        steering = "lhd" if any(kw in combined for kw in LHD_KEYWORDS) else "unknown"
+
+        price_obj = data.get("listing_price") or {}
+        amount_str = price_obj.get("amount") or price_obj.get("amount_with_offset")
+        currency = price_obj.get("currency")
+        raw_price = None
+        price_val = None
+        if amount_str:
+            try:
+                price_val = int(float(amount_str) * 100)
+                symbol = {"EUR": "€", "GBP": "£", "USD": "$"}.get(currency, currency or "")
+                raw_price = f"{symbol}{float(amount_str):,.0f}"
+            except (ValueError, TypeError):
+                pass
+        else:
+            log.info("Facebook listing without price: %s — %s", url, title[:60])
+
+        loc_obj = data.get("location") or {}
+        display = loc_obj.get("display_name")
+        city = loc_obj.get("city") or loc_obj.get("reverse_geocode", {}).get("city") or ""
+        country = loc_obj.get("country_code") or country_from_display(display)
+        location_str = display or (", ".join(filter(None, [city, (country or "").upper()])) or None)
+
+        image_url = data.get("_image_url")
+
+        description = re.sub(r"\s+", " ", desc).strip()[:1000] or None
+
+        return Listing(
+            url=url,
+            site_name="facebook",
+            title=title,
+            price=raw_price,
+            price_value=price_val,
+            price_currency=currency,
+            year=year,
+            location=location_str,
+            country_code=(country or "").upper() or None,
+            image_url=image_url,
+            steering=steering,
+            description=description,
+        )
+    except Exception as exc:
+        log.debug("Facebook listing build error: %s", exc)
+        return None
+
+
+def fetch_watched_listings(
+    urls: List[str],
+    profile_dir: str,
+    log,
+) -> List[tuple[str, Optional[Listing], str]]:
+    """Fetch a batch of FB marketplace listings by direct URL, bypassing
+    marketplace search entirely. Used by the watched-URL feature to catch
+    listings FB silently suppresses from search results (e.g. cross-region
+    location mismatch).
+
+    Title filter is intentionally skipped — the user has explicitly opted in
+    to these URLs, so the discovery filter doesn't apply. Returns one
+    (url, listing_or_None, status) tuple per input. Status is one of:
+    'ok'           — fetched and built successfully
+    'fetch_failed' — couldn't extract relay data (listing removed, blocked,
+                     or page structure changed)
+    """
+    results: list[tuple[str, Optional[Listing], str]] = []
+    if not urls:
+        return results
+
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        ctx = p.chromium.launch_persistent_context(
+            user_data_dir=profile_dir,
+            headless=True,
+            user_agent=random.choice(USER_AGENTS),
+            viewport={"width": 1366, "height": 768},
+            locale="en-GB",
+        )
+        page = ctx.new_page()
+        for url in urls:
+            item_id = _extract_item_id(url)
+            listing: Optional[Listing] = None
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                time.sleep(random.uniform(1.5, 3.0))
+                html = page.content()
+                data = _extract_relay_listing(html, item_id)
+                if data:
+                    dom_image = _read_dom_image(page)
+                    if dom_image:
+                        data["_image_url"] = dom_image
+                    lp = data.get("listing_price") or {}
+                    if not lp.get("amount"):
+                        dom_price = _read_dom_price(page)
+                        if dom_price:
+                            data["listing_price"] = dom_price
+                    listing = _build_listing_from_relay(data, url, log)
+            except Exception as exc:
+                log.debug("Watched fetch failed for %s: %s", url, exc)
+
+            status = "ok" if listing else "fetch_failed"
+            results.append((url, listing, status))
+            time.sleep(random.uniform(2.0, 4.0))
+        ctx.close()
+
+    return results
+
 
 def _decode_json_string(s: Optional[str]) -> Optional[str]:
     """Decode JSON escape sequences inside a regex-captured value.
