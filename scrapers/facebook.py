@@ -26,6 +26,37 @@ def _profile_dir(config: dict) -> str:
     return config.get("profile_dir", ".fb_profile")
 
 
+def _check_session_valid(page, log) -> bool:
+    """Probe whether the FB session in `page`'s context is still authenticated.
+
+    Navigates to /marketplace/ and checks the resolved URL. FB redirects
+    unauthenticated traffic to /login (or to /checkpoint/ if it wants
+    re-verification). Returns True iff we land on a real marketplace URL.
+
+    Catches the common failure that hangs the cron: FB logs the session
+    out (suspicious-activity flag), but the scraper happily marches into a
+    23-anchor search that does nothing useful and ties up the DB. With this
+    probe, we abort early, log a clear warning, and let the rest of the
+    pipeline proceed.
+    """
+    try:
+        page.goto(f"{BASE_URL}/marketplace/", wait_until="domcontentloaded", timeout=20000)
+        # Give the SPA a moment to issue any client-side redirect.
+        time.sleep(2.0)
+        url = (page.url or "").lower()
+        if "/login" in url or "/checkpoint" in url:
+            log.warning(
+                "Facebook session invalid (landed on %s). "
+                "Skipping Facebook scrape this tick — run `python run.py --fb-login` to re-auth.",
+                page.url,
+            )
+            return False
+        return True
+    except Exception as exc:
+        log.warning("Facebook session probe failed: %s — skipping FB scrape.", exc)
+        return False
+
+
 class FacebookScraper(BaseScraper):
     site_name = "facebook"
 
@@ -66,6 +97,10 @@ class FacebookScraper(BaseScraper):
             )
 
             search_page = ctx.new_page()
+            if not _check_session_valid(search_page, self.log):
+                ctx.close()
+                return results
+
             # Per-anchor sleep was 2-4s; FB throttled hard at that rate
             # (19/23 anchors returning 0 results in the 23-anchor rerun).
             # Direct testing with 8-12s spacing produced 36/36/20/36 across
@@ -251,9 +286,10 @@ def fetch_watched_listings(
     Title filter is intentionally skipped — the user has explicitly opted in
     to these URLs, so the discovery filter doesn't apply. Returns one
     (url, listing_or_None, status) tuple per input. Status is one of:
-    'ok'           — fetched and built successfully
-    'fetch_failed' — couldn't extract relay data (listing removed, blocked,
-                     or page structure changed)
+    'ok'             — fetched and built successfully
+    'fetch_failed'   — couldn't extract relay data (listing removed, blocked,
+                       or page structure changed)
+    'session_invalid' — FB session is logged out; nothing was fetched
     """
     results: list[tuple[str, Optional[Listing], str]] = []
     if not urls:
@@ -270,6 +306,9 @@ def fetch_watched_listings(
             locale="en-GB",
         )
         page = ctx.new_page()
+        if not _check_session_valid(page, log):
+            ctx.close()
+            return [(u, None, "session_invalid") for u in urls]
         for url in urls:
             item_id = _extract_item_id(url)
             listing: Optional[Listing] = None

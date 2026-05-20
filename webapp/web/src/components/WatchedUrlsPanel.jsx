@@ -164,6 +164,8 @@ function statusInfo(status) {
       return { label: "ok", cls: "bg-green-100 text-green-800", title: "Last fetch succeeded" };
     case "fetch_failed":
       return { label: "fail", cls: "bg-red-100 text-red-800", title: "Last fetch failed — listing may be removed" };
+    case "session_invalid":
+      return { label: "no auth", cls: "bg-orange-100 text-orange-800", title: "FB session logged out — run `python run.py --fb-login` to re-auth" };
     case "unsupported_site":
       return { label: "n/a", cls: "bg-slate-100 text-slate-700", title: "Site not yet supported for direct fetch" };
     default:
