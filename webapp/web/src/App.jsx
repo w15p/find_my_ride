@@ -40,7 +40,29 @@ export default function App() {
   const [reasons, setReasons] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
+  // `error` becomes a toast — leaving it persistent so the user sees it
+  // regardless of scroll position. Auto-dismiss after 12s; manual dismiss
+  // via the X button.
   const [error, setError] = useState(null);
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 12000);
+    return () => clearTimeout(t);
+  }, [error]);
+
+  function reportError(label, e) {
+    // Normalize: jsonOrThrow throws "<status>: <body>" where body is JSON
+    // like {"detail": "..."}. Pull out the detail if we can.
+    let msg = e?.message || String(e);
+    const match = msg.match(/^(\d+):\s*(.*)$/s);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[2]);
+        if (parsed?.detail) msg = parsed.detail;
+      } catch (_) { /* keep raw */ }
+    }
+    setError(`${label}: ${msg}`);
+  }
 
   // searchId defaults to URL param if present, otherwise 1.
   const [searchId, setSearchId] = useState(() => searchIdFromUrl() ?? 1);
@@ -59,7 +81,7 @@ export default function App() {
       setCount(list.count);
       setStats(st);
     } catch (e) {
-      setError(e.message);
+      reportError("Failed to load listings", e);
     } finally {
       setLoading(false);
     }
@@ -96,20 +118,24 @@ export default function App() {
   }
 
   function onReject(url, reason, note) {
-    api.reject(url, reason, note).then(reload).catch((e) => setError(e.message));
+    api.reject(url, reason, note).then(reload).catch((e) => reportError("Reject failed", e));
   }
   function onUnreject(url) {
-    api.unreject(url).then(reload).catch((e) => setError(e.message));
+    api.unreject(url).then(reload).catch((e) => reportError("Unreject failed", e));
   }
   function onNoteSave(url, note) {
-    return api.setNote(url, note);
+    return api.setNote(url, note).catch((e) => { reportError("Save note failed", e); throw e; });
   }
   function onTogglePin(url, currentlyPinned) {
     const promise = currentlyPinned ? api.unpin(url) : api.pin(url);
-    promise.then(reload).catch((e) => setError(e.message));
+    const label = currentlyPinned ? "Unpin failed" : "Pin failed";
+    promise.then(reload).catch((e) => reportError(label, e));
   }
   function onOverride(url, fields) {
-    return api.setOverride(url, fields).then(reload);
+    return api.setOverride(url, fields).then(reload).catch((e) => {
+      reportError("Save override failed", e);
+      throw e;
+    });
   }
 
   const sites = useMemo(() => Object.keys(stats?.by_site || {}).sort(), [stats]);
@@ -152,8 +178,23 @@ export default function App() {
       <WatchedUrlsPanel searchId={searchId} />
 
       {error && (
-        <div className="bg-red-100 border border-red-400 text-red-800 px-4 py-2 m-4 rounded">
-          {error}
+        <div
+          role="alert"
+          className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-2xl w-[calc(100%-2rem)] bg-red-600 text-white px-4 py-3 rounded-lg shadow-2xl flex items-start gap-3 animate-pulse"
+          style={{ animation: "none" }}
+        >
+          <div className="flex-1">
+            <div className="font-bold text-base">Error</div>
+            <div className="text-sm mt-1 whitespace-pre-wrap">{error}</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setError(null)}
+            className="text-white hover:text-red-200 font-bold text-2xl leading-none px-1"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
         </div>
       )}
 

@@ -21,11 +21,12 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import sqlite3
 import requests
 import yaml
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from urllib.parse import urlparse
@@ -173,6 +174,30 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(sqlite3.OperationalError)
+    def _sqlite_error_handler(_request: Request, exc: sqlite3.OperationalError):
+        """Surface DB-busy errors as actionable 503s instead of opaque 500s.
+
+        Caught the user pattern where a cron orphan held the write lock and
+        every reject/pin/note returned 'Internal Server Error' with no hint
+        what was wrong. With this handler the UI gets a clear, dismissible
+        toast naming the cause.
+        """
+        msg = str(exc).lower()
+        if "locked" in msg or "busy" in msg:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "detail": (
+                        "Database is busy — likely a long-running cron "
+                        "process holding a write lock. Try again in a "
+                        "moment, or check `ps -ef | grep run.py` for an "
+                        "orphan to kill."
+                    ),
+                },
+            )
+        return JSONResponse(status_code=500, content={"detail": f"SQLite error: {exc}"})
 
     def get_db() -> ListingDB:
         # Per-request connection avoids sqlite cross-thread complaints under
