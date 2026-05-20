@@ -661,6 +661,16 @@ def _validate_facebook(cfg: dict, db: ListingDB, urls: list[str], sold_signals: 
             locale="en-GB",
         )
         page = ctx.new_page()
+        # Bail early if the FB session has been invalidated. Without this
+        # check, every listing-validation page.goto hits a login wall, hangs
+        # waiting for content that never appears, and the cron process
+        # holds the DB write lock — blocking reject/pin/note in the webapp.
+        # Pattern caught after FB's 2026-05-19 forced logout.
+        from scrapers.facebook import _check_session_valid
+        if not _check_session_valid(page, log):
+            ctx.close()
+            return
+
         for url in urls:
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30000)
