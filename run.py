@@ -40,6 +40,7 @@ from core.database import ListingDB, _DEFAULT_SEARCH_LABEL, _DEFAULT_SEARCH_SLUG
 from core.http_client import make_session, polite_get
 from core.models import Listing
 from core.notifier import EmailNotifier
+from core.watchdog import OperationTimeout, watchdog
 from scrapers.autoscout24 import AutoScout24Scraper
 from scrapers.carandclassic import CarAndClassicScraper
 from scrapers.classicdriver import ClassicDriverScraper
@@ -54,6 +55,19 @@ SCRAPER_MAP = {
     "marktplaats":    MarktplaatsScraper,
     "autoscout24":    AutoScout24Scraper,
     "facebook":       FacebookScraper,
+}
+
+# Per-site wall-clock budgets used by the watchdog in run_scrape. A site that
+# legitimately needs longer (FB with 23-anchor sweep + 30-60s sleeps) gets
+# a generous budget; the point is to catch *hangs*, not slow-but-progressing.
+# Sites missing from the dict fall back to the 15min default at the call site.
+_SITE_BUDGETS = {
+    "facebook":      4 * 60 * 60,   # 4h — current 23-anchor rate; will tighten when option 1 ships
+    "ebay":         45 * 60,        # 45m — observed 20min retry storm 2026-05-22
+    "carandclassic": 10 * 60,
+    "marktplaats":   10 * 60,
+    "autoscout24":   15 * 60,
+    "classicdriver": 10 * 60,
 }
 
 _DEFAULT_SOLD_SIGNALS = [
@@ -415,7 +429,16 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
             )
             log.info("Running scraper: %s (search=%s)", site_key, slug)
 
-            listings = scraper._safe_fetch()
+            # Per-site watchdog budget. FB's 30-60s anchor sleep × 23 anchors
+            # + detail fetches can legitimately take 3h, so it gets the lion's
+            # share; eBay has been seen to hit a 20min connection-retry storm
+            # (2026-05-22 cron log). Others finish in seconds.
+            try:
+                with watchdog(_SITE_BUDGETS.get(site_key, 15 * 60), f"scrape-{site_key}"):
+                    listings = scraper._safe_fetch()
+            except OperationTimeout:
+                log.warning("  Site %s exceeded budget — skipping its results this tick", site_key)
+                continue
             log.info("  %d total listings fetched from %s", len(listings), site_key)
 
             # Drop junk before doing any further work (avoids wasted phash downloads)
@@ -490,7 +513,14 @@ def _process_watched_urls(
 
     from scrapers.facebook import fetch_watched_listings
     profile_dir = _fb_profile_dir(cfg)
-    fetched = fetch_watched_listings(fb_urls, profile_dir, log)
+    # ~30s per URL realistic; 30min absolute ceiling protects against a
+    # Playwright goto hang on a single bad URL stalling the whole tick.
+    try:
+        with watchdog(30 * 60, "watched-urls-fetch"):
+            fetched = fetch_watched_listings(fb_urls, profile_dir, log)
+    except OperationTimeout:
+        log.warning("Watched-URL fetch exceeded 30min — skipping for this tick")
+        return []
 
     new_listings: list[Listing] = []
     for url, listing, status in fetched:
@@ -593,37 +623,45 @@ def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
     profile_dir = _fb_profile_dir(cfg)
     updated = unchanged = failed = 0
     log.info("Refreshing image URLs for %d Facebook listing(s)", len(urls))
-    with sync_playwright() as p:
-        ctx = p.chromium.launch_persistent_context(
-            user_data_dir=profile_dir,
-            headless=True,
-            viewport={"width": 1366, "height": 768},
-            locale="en-GB",
-        )
-        page = ctx.new_page()
-        for i, url in enumerate(urls, 1):
-            try:
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                time.sleep(random.uniform(1.0, 2.0))
-                new_img = _read_dom_image(page)
-                if not new_img:
-                    failed += 1
-                    log.warning("[%d/%d] No image extracted from %s", i, len(urls), url)
-                    continue
-                current = db.conn.execute(
-                    "SELECT image_url FROM listings WHERE url=?", (url,)
-                ).fetchone()
-                if current and current["image_url"] == new_img:
-                    unchanged += 1
-                else:
-                    db.update_image_url(url, new_img)
-                    updated += 1
-                    log.info("[%d/%d] Updated: %s", i, len(urls), url[:80])
-                time.sleep(random.uniform(1.0, 2.0))
-            except Exception as exc:
-                failed += 1
-                log.warning("[%d/%d] Failed for %s: %s", i, len(urls), url, exc)
-        ctx.close()
+    # ~3-5s per listing realistic; cap at 45min as a bound against a runaway
+    # loop (e.g. Playwright pipe IO hanging mid-batch). Partial progress is
+    # safe to commit — each db.update_image_url is its own auto-commit.
+    try:
+        with watchdog(45 * 60, "refresh-fb-images"):
+            with sync_playwright() as p:
+                ctx = p.chromium.launch_persistent_context(
+                    user_data_dir=profile_dir,
+                    headless=True,
+                    viewport={"width": 1366, "height": 768},
+                    locale="en-GB",
+                )
+                page = ctx.new_page()
+                for i, url in enumerate(urls, 1):
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        time.sleep(random.uniform(1.0, 2.0))
+                        new_img = _read_dom_image(page)
+                        if not new_img:
+                            failed += 1
+                            log.warning("[%d/%d] No image extracted from %s", i, len(urls), url)
+                            continue
+                        current = db.conn.execute(
+                            "SELECT image_url FROM listings WHERE url=?", (url,)
+                        ).fetchone()
+                        if current and current["image_url"] == new_img:
+                            unchanged += 1
+                        else:
+                            db.update_image_url(url, new_img)
+                            updated += 1
+                            log.info("[%d/%d] Updated: %s", i, len(urls), url[:80])
+                        time.sleep(random.uniform(1.0, 2.0))
+                    except Exception as exc:
+                        failed += 1
+                        log.warning("[%d/%d] Failed for %s: %s", i, len(urls), url, exc)
+                ctx.close()
+    except OperationTimeout:
+        log.warning("FB image refresh exceeded 45min — committed %d of %d so far",
+                    updated + unchanged + failed, len(urls))
     log.info(
         "Refresh complete: %d updated, %d unchanged, %d failed (of %d total)",
         updated, unchanged, failed, len(urls),
@@ -750,10 +788,18 @@ def run_validate(cfg: dict, db: ListingDB) -> None:
 
     if other_urls:
         session = make_session()
-        _validate_http(session, db, other_urls, sold_signals, threshold)
+        try:
+            with watchdog(30 * 60, "validate-http"):
+                _validate_http(session, db, other_urls, sold_signals, threshold)
+        except OperationTimeout:
+            log.warning("HTTP validate exceeded 30min — moving on to FB validate")
 
     if fb_urls:
-        _validate_facebook(cfg, db, fb_urls, sold_signals, threshold)
+        try:
+            with watchdog(60 * 60, "validate-facebook"):
+                _validate_facebook(cfg, db, fb_urls, sold_signals, threshold)
+        except OperationTimeout:
+            log.warning("FB validate exceeded 60min — aborting validate phase")
 
 
 def cmd_list_db(db: ListingDB) -> None:
