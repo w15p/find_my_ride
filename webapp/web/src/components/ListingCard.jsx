@@ -55,6 +55,18 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
   const currencyOverridden = !!l.user_price_currency &&
     (l.user_price_currency || "").toUpperCase() !== (l.price_currency || "").toUpperCase();
 
+  // Price-value override: input shows whole units ("17900"), API stores
+  // cents internally (so 17900 → 1790000). Matches the year-input pattern
+  // (always-input, blue border when overridden, ↶ to clear).
+  const effectivePriceWhole = l.display_price_value != null
+    ? String(Math.floor(l.display_price_value / 100))
+    : "";
+  const priceOverridden = l.user_price_value != null &&
+    l.user_price_value !== l.price_value;
+  const [priceDraft, setPriceDraft] = useState(effectivePriceWhole);
+  useEffect(() => { setPriceDraft(effectivePriceWhole); }, [effectivePriceWhole]);
+  const currencySymbol = ({ EUR: "€", GBP: "£", USD: "$" })[effectiveCurrency] || effectiveCurrency || "";
+
   // Amber-for-RHD is a "needs your attention" cue. Once the user manually
   // acknowledges the steering side, treat it as reviewed — no amber, even
   // if the value is still RHD.
@@ -155,7 +167,36 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
         </div>
 
         <div className="text-emerald-700 font-bold text-base flex items-center gap-1 flex-wrap">
-          <span>{l.display_price || l.price || "POA"}</span>
+          {currencySymbol && <span>{currencySymbol}</span>}
+          <input
+            type="text"
+            inputMode="numeric"
+            value={priceDraft}
+            placeholder={l.price || "POA"}
+            onChange={(e) => setPriceDraft(e.target.value)}
+            onBlur={() => {
+              if (priceDraft === effectivePriceWhole) return;
+              onOverride(l.url, { price_value: priceDraft }).catch(() => {
+                setPriceDraft(effectivePriceWhole);
+              });
+            }}
+            onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+            title={priceOverridden ? "Price overridden — click ↶ to restore scraped value" : "Click to edit"}
+            className={`text-base font-bold text-emerald-700 border rounded px-1 py-0 w-24 ${
+              priceOverridden
+                ? "border-blue-400 bg-blue-50"
+                : "border-transparent hover:border-slate-200 focus:border-slate-300 bg-transparent"
+            }`}
+          />
+          {priceOverridden && (
+            <button
+              onClick={() => onOverride(l.url, { price_value: "" })}
+              title="Clear override (restore scraped price)"
+              className="text-[10px] text-slate-400 hover:text-slate-700"
+            >
+              ↶
+            </button>
+          )}
           {usd && <span className="text-slate-500 font-normal text-xs">({usd})</span>}
           {effectiveCurrency && (
             <>
