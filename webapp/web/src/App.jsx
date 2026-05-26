@@ -137,6 +137,9 @@ export default function App() {
       throw e;
     });
   }
+  function onMarkActive(url) {
+    api.markActive(url).then(reload).catch((e) => reportError("Mark active failed", e));
+  }
 
   const sites = useMemo(() => Object.keys(stats?.by_site || {}).sort(), [stats]);
 
@@ -226,6 +229,7 @@ export default function App() {
               onNoteSave={onNoteSave}
               onTogglePin={onTogglePin}
               onOverride={onOverride}
+              onMarkActive={onMarkActive}
             />
           ))}
         </div>

@@ -51,6 +51,16 @@ export async function unreject(url) {
   );
 }
 
+export async function markActive(url) {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/active`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    })
+  );
+}
+
 export async function setNote(url, note) {
   return jsonOrThrow(
     await fetch(`${BASE}/api/note`, {

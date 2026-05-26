@@ -687,6 +687,20 @@ class ListingDB:
             (url,),
         )
 
+    def mark_active(self, url: str) -> bool:
+        """User-facing un-sold action: flip status back to active, clear the
+        sold timestamp, and reset the sold-signal counter so the validate
+        loop has to find fresh evidence before re-marking. Returns True iff
+        a row was updated. Used by the 'Mark as active' button in the
+        review UI to recover from validate false positives (e.g. transient
+        page errors, FB session-invalid login walls)."""
+        cur = self.conn.execute(
+            "UPDATE listings SET status='active', sold_at=NULL, sold_signals_count=0 WHERE url=?",
+            (url,),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def update_image_url(self, url: str, image_url: Optional[str]) -> None:
         """Refresh the stored image URL for a listing.
 

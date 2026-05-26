@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave, onTogglePin, onOverride }) {
+export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave, onTogglePin, onOverride, onMarkActive }) {
   const l = listing;
   const [note, setNote] = useState(l.user_note || "");
   const [noteSaving, setNoteSaving] = useState(false);
@@ -128,6 +128,16 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
         {rejected && (
           <span className="absolute bottom-2 right-2 bg-red-600 text-white text-xs px-2 py-0.5 rounded">
             ✗ {l.user_reject_reason || "rejected"}
+          </span>
+        )}
+        {l.status === "sold" && !rejected && (
+          <span className="absolute bottom-2 right-2 bg-slate-700 text-white text-xs px-2 py-0.5 rounded">
+            SOLD
+          </span>
+        )}
+        {l.status === "expired" && !rejected && (
+          <span className="absolute bottom-2 right-2 bg-slate-500 text-white text-xs px-2 py-0.5 rounded">
+            EXPIRED
           </span>
         )}
       </div>
@@ -401,6 +411,15 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
               className="text-sm px-3 py-1 border border-slate-300 rounded hover:bg-slate-100"
             >
               Un-reject
+            </button>
+          )}
+          {(l.status === "sold" || l.status === "expired") && onMarkActive && (
+            <button
+              onClick={() => onMarkActive(l.url)}
+              title="Validate flagged this as sold/expired. Click to put it back in the active feed."
+              className="text-sm px-3 py-1 border border-slate-300 rounded hover:bg-slate-100"
+            >
+              Mark active
             </button>
           )}
         </div>

@@ -421,6 +421,18 @@ def create_app() -> FastAPI:
         db.set_user_reject(body.url, None, rejected=False)
         return {"ok": True}
 
+    @app.post("/api/active")
+    def mark_active(body: UnrejectBody = Body(...)):
+        """Flip a sold-marked listing back to active. Recovers from
+        validate false positives (page errors, FB session-invalid login
+        walls) without requiring a shell session against the DB."""
+        db = get_db()
+        existed = db.conn.execute("SELECT 1 FROM listings WHERE url = ?", (body.url,)).fetchone()
+        if not existed:
+            raise HTTPException(404, "URL not in DB")
+        db.mark_active(body.url)
+        return {"ok": True}
+
     @app.patch("/api/note")
     def update_note(body: NoteBody = Body(...)):
         db = get_db()
