@@ -21,10 +21,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import hashlib
-import os
 import sqlite3
-import tempfile
 import requests
 import yaml
 from fastapi import Body, FastAPI, HTTPException, Request
@@ -33,6 +30,8 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from urllib.parse import urlparse
+
+from core import image_cache
 
 
 class RejectBody(BaseModel):
@@ -81,26 +80,6 @@ log = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIST = Path(__file__).resolve().parent / "web" / "dist"
 
-# Local on-disk cache for proxied images. The FB CDN expires signed URLs
-# every 24-48h, and origin fetches against expired URLs return 403 → broken
-# tiles in the review UI. Caching the bytes the first time we successfully
-# proxy them means the UI keeps rendering even after the source URL expires.
-# Bonus: removes the repeated origin fetch (faster page loads, lighter
-# outbound footprint, less chance of being flagged as scraping).
-IMAGE_CACHE_DIR = ROOT / "cache" / "images"
-
-# Map Content-Type → file extension on write and back on read. Unknown
-# content types fall through to .bin and an octet-stream media type.
-_EXT_BY_TYPE = {
-    "image/jpeg": "jpg",
-    "image/jpg":  "jpg",
-    "image/png":  "png",
-    "image/webp": "webp",
-    "image/gif":  "gif",
-    "image/avif": "avif",
-}
-_TYPE_BY_EXT = {v: k for k, v in _EXT_BY_TYPE.items()}
-
 # Image-proxy hosts. Browser can't fetch some of these directly because the
 # remote CDN requires a specific Referer header (Car & Classic) or because
 # Facebook's image servers reject `localhost` referrers. Proxying lets us set
@@ -141,56 +120,6 @@ def _referer_for(host: str) -> str:
 def _load_cfg() -> dict:
     with open(ROOT / "config" / "config.yaml") as f:
         return yaml.safe_load(f)
-
-
-def _image_cache_path(url: str, ext: str) -> Path:
-    """Return the on-disk cache path for an image URL with the given
-    extension. URL is hashed to a stable filename; first two chars of the
-    hash are used as a shard directory so we never end up with thousands
-    of siblings in one folder.
-    """
-    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    return IMAGE_CACHE_DIR / key[:2] / f"{key}.{ext}"
-
-
-def _find_cached_image(url: str) -> Optional[tuple[Path, str]]:
-    """Look up a previously-cached image for `url`. Returns (path, media_type)
-    on hit, None on miss. Glob covers all known extensions (we don't know
-    the extension at lookup time without the previous Content-Type)."""
-    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    shard = IMAGE_CACHE_DIR / key[:2]
-    if not shard.exists():
-        return None
-    for match in shard.glob(f"{key}.*"):
-        ext = match.suffix.lstrip(".").lower()
-        media_type = _TYPE_BY_EXT.get(ext, "application/octet-stream")
-        return (match, media_type)
-    return None
-
-
-def _write_cached_image(url: str, content_type: str, byte_chunks) -> Path:
-    """Atomically write `byte_chunks` to the cache file for `url`. Returns
-    the final cache path. Raises on IO failure (caller falls back to
-    direct streaming)."""
-    ext = _EXT_BY_TYPE.get(content_type, "bin")
-    final_path = _image_cache_path(url, ext)
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    # tempfile in the same dir → os.replace is atomic on the same filesystem.
-    fd, tmp_name = tempfile.mkstemp(dir=final_path.parent, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as out:
-            for chunk in byte_chunks:
-                if chunk:
-                    out.write(chunk)
-        os.replace(tmp_name, final_path)
-    except Exception:
-        # Clean up the temp file if anything went wrong before the rename.
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
-        raise
-    return final_path
 
 
 def _row_to_dict(r) -> dict:
@@ -386,7 +315,7 @@ def create_app() -> FastAPI:
 
         # Cache lookup first — serve from disk if we've ever successfully
         # proxied this URL, even if the origin has since expired the link.
-        cached = _find_cached_image(url)
+        cached = image_cache.find(url)
         if cached is not None:
             cache_path, media_type = cached
             return FileResponse(
@@ -414,7 +343,7 @@ def create_app() -> FastAPI:
         # rename into place. If we crash mid-write the temp file is the only
         # casualty — never a half-image cache entry.
         try:
-            cache_path = _write_cached_image(url, content_type, r.iter_content(8192))
+            cache_path = image_cache.write(url, content_type, r.iter_content(8192))
         except Exception as exc:
             log.warning("Image cache write failed for %s: %s — falling back to streaming", url, exc)
             # Fallback: stream straight through without caching. Rare path.

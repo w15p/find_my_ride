@@ -619,9 +619,10 @@ def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
     # Import here so the heavy `scrapers.facebook` module isn't loaded for
     # CLI commands that don't need it.
     from scrapers.facebook import _read_dom_image
+    from core import image_cache
 
     profile_dir = _fb_profile_dir(cfg)
-    updated = unchanged = failed = 0
+    updated = unchanged = failed = prefetched = 0
     log.info("Refreshing image URLs for %d Facebook listing(s)", len(urls))
     # ~3-5s per listing realistic; cap at 45min as a bound against a runaway
     # loop (e.g. Playwright pipe IO hanging mid-batch). Partial progress is
@@ -654,6 +655,11 @@ def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
                             db.update_image_url(url, new_img)
                             updated += 1
                             log.info("[%d/%d] Updated: %s", i, len(urls), url[:80])
+                        # Prefetch the bytes into the proxy cache so the
+                        # next view loads instantly + survives the next FB
+                        # CDN expiry. Best-effort: failures are debug-only.
+                        if _prefetch_image_to_cache(new_img):
+                            prefetched += 1
                         time.sleep(random.uniform(1.0, 2.0))
                     except Exception as exc:
                         failed += 1
@@ -663,9 +669,42 @@ def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
         log.warning("FB image refresh exceeded 45min — committed %d of %d so far",
                     updated + unchanged + failed, len(urls))
     log.info(
-        "Refresh complete: %d updated, %d unchanged, %d failed (of %d total)",
-        updated, unchanged, failed, len(urls),
+        "Refresh complete: %d updated, %d unchanged, %d failed, %d prefetched (of %d total)",
+        updated, unchanged, failed, prefetched, len(urls),
     )
+
+
+def _prefetch_image_to_cache(img_url: str) -> bool:
+    """Download an image URL into the proxy disk cache. Returns True iff a
+    new cache entry was written. Skips silently if already cached or on any
+    fetch/write failure — this is best-effort warming, not a critical path.
+    """
+    from core import image_cache
+    log = logging.getLogger("refresh.fb")
+    if image_cache.find(img_url):
+        return False
+    try:
+        r = requests.get(
+            img_url,
+            timeout=10,
+            stream=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+            },
+        )
+        if r.status_code != 200:
+            log.debug("Prefetch %d for %s — skipping cache", r.status_code, img_url)
+            return False
+        content_type = (r.headers.get("content-type") or "image/jpeg").split(";")[0].strip().lower()
+        image_cache.write(img_url, content_type, r.iter_content(8192))
+        return True
+    except Exception as exc:
+        log.debug("Prefetch failed for %s: %s", img_url, exc)
+        return False
 
 
 def _is_fb_sold(body_text: str, generic_signals: list[str]) -> bool:
