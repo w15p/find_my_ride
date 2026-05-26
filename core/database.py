@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS tenant_listing_state (
     user_location       TEXT,
     user_year           INTEGER,
     user_price_currency TEXT,
+    user_price_value    INTEGER,
     PRIMARY KEY (tenant_id, listing_url)
 );
 
@@ -147,6 +148,7 @@ _USER_STATE_COLS = (
     "user_rejected", "user_reject_reason", "user_rejected_at",
     "user_note", "user_pinned", "user_pinned_at",
     "user_steering", "user_location", "user_year", "user_price_currency",
+    "user_price_value",
 )
 
 
@@ -223,8 +225,17 @@ _MIGRATIONS = [
     ("user_location",      "ALTER TABLE listings ADD COLUMN user_location TEXT"),
     ("user_year",          "ALTER TABLE listings ADD COLUMN user_year INTEGER"),
     ("user_price_currency","ALTER TABLE listings ADD COLUMN user_price_currency TEXT"),
+    ("user_price_value",   "ALTER TABLE listings ADD COLUMN user_price_value INTEGER"),
     ("description_language",   "ALTER TABLE listings ADD COLUMN description_language TEXT"),
     ("description_translated", "ALTER TABLE listings ADD COLUMN description_translated TEXT"),
+]
+
+# Same idempotent ALTER pattern for tenant_listing_state. SCHEMA_SEARCHES
+# declares the column for new DBs (via CREATE TABLE IF NOT EXISTS), and this
+# list backfills it onto existing DBs whose tenant_listing_state was created
+# before the column was added.
+_TLS_MIGRATIONS = [
+    ("user_price_value", "ALTER TABLE tenant_listing_state ADD COLUMN user_price_value INTEGER"),
 ]
 
 
@@ -251,6 +262,10 @@ class ListingDB:
         existing = {row["name"] for row in self.conn.execute("PRAGMA table_info(listings)")}
         for col, ddl in _MIGRATIONS:
             if col not in existing:
+                self.conn.execute(ddl)
+        existing_tls = {row["name"] for row in self.conn.execute("PRAGMA table_info(tenant_listing_state)")}
+        for col, ddl in _TLS_MIGRATIONS:
+            if col not in existing_tls:
                 self.conn.execute(ddl)
 
     def _apply_structural_migrations(self) -> None:
@@ -815,16 +830,20 @@ class ListingDB:
         self.conn.commit()
 
     def set_user_field(self, url: str, field: str, value) -> None:
-        """Set a user-override scalar (user_steering, user_location, user_year).
+        """Set a user-override scalar (user_steering, user_location, user_year,
+        user_price_currency, user_price_value).
 
-        `value` may be a string (text fields), an int (year), or None / empty
-        string / whitespace to clear the override.
+        `value` may be a string (text fields), an int (year, price_value), or
+        None / empty string / whitespace to clear the override.
         """
-        if field not in ("user_steering", "user_location", "user_year", "user_price_currency"):
+        if field not in (
+            "user_steering", "user_location", "user_year",
+            "user_price_currency", "user_price_value",
+        ):
             raise ValueError(f"unsupported user field: {field}")
         if value is None or (isinstance(value, str) and not value.strip()):
             v = None
-        elif field == "user_year":
+        elif field in ("user_year", "user_price_value"):
             v = int(value)
         else:
             v = str(value).strip()
