@@ -63,6 +63,9 @@ class OverrideBody(BaseModel):
     # ISO 4217 currency override — "EUR" / "GBP" / "USD" / "" (clear).
     # Amount stays as scraped; only the symbol + USD conversion change.
     price_currency: Optional[str] = None
+    # Price amount override, in whole units (e.g. "17900" for €17,900).
+    # API multiplies by 100 to store cents internally. "" clears.
+    price_value: Optional[str] = None
 
 
 class WatchedAddBody(BaseModel):
@@ -134,16 +137,20 @@ def _row_to_dict(r) -> dict:
         d["display_location"] = enhance_location(d.get("location"), d.get("country_code"))
     d["display_year"] = d.get("user_year") if d.get("user_year") is not None else d.get("year")
     d["display_currency"] = d.get("user_price_currency") or d.get("price_currency")
+    # User price-amount override wins over the scraped value. Stored in cents
+    # so format_price + usd_value can consume it identically to price_value.
+    effective_pv = d.get("user_price_value") if d.get("user_price_value") is not None else d.get("price_value")
+    d["display_price_value"] = effective_pv
     # USD conversion uses the *effective* currency so an EUR-corrected listing's
     # $ amount is recomputed at EUR→USD instead of being treated as already USD.
-    usd = usd_value(d.get("price_value"), d.get("display_currency"))
+    usd = usd_value(effective_pv, d.get("display_currency"))
     d["price_usd"] = round(usd, 0) if usd is not None else None
-    # Always derive the displayed price from `price_value` + effective
+    # Always derive the displayed price from the effective price value + effective
     # currency so the symbol is consistent across sites (otherwise eBay
     # leaks its `"GBP 21950.00"` ISO-prefixed string into the UI while
     # every other scraper renders `£21,950`). Fall back to the scraper's
     # raw string only when we don't have structured values.
-    d["display_price"] = format_price(d.get("price_value"), d.get("display_currency")) or d.get("price")
+    d["display_price"] = format_price(effective_pv, d.get("display_currency")) or d.get("price")
     return d
 
 
@@ -485,6 +492,22 @@ def create_app() -> FastAPI:
             if ccy not in allowed:
                 raise HTTPException(400, f"price_currency must be one of {sorted(allowed)}")
             db.set_user_field(body.url, "user_price_currency", ccy)
+        if body.price_value is not None:
+            raw = body.price_value.strip()
+            if not raw:
+                db.set_user_field(body.url, "user_price_value", None)
+            else:
+                try:
+                    whole = int(raw)
+                except ValueError:
+                    raise HTTPException(400, f"price_value must be a whole number or empty, got {body.price_value!r}")
+                if whole < 0:
+                    raise HTTPException(400, f"price_value must be non-negative, got {whole}")
+                if whole > 100_000_000:
+                    # 100M caps the most expensive plausible car at any currency.
+                    raise HTTPException(400, f"price_value implausibly large: {whole}")
+                # Stored as cents to match the existing price_value column unit.
+                db.set_user_field(body.url, "user_price_value", whole * 100)
         return {"ok": True}
 
     # ── Watched URLs (fetched directly each cron tick, bypass search) ────────
