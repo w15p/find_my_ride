@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Mac-side launchd agent for the haystack FB egress proxy.
+
+  Holds a persistent reverse-SOCKS tunnel (ssh remote dynamic forwarding)
+  from this Mac up to the EC2 instance, so Facebook traffic launched on EC2
+  egresses from this machine's residential IP instead of the datacenter EIP
+  (which FB redirects to /login). EC2 reaches the proxy at socks5://127.0.0.1:1080
+  via the FB_PROXY env var; see scrapers/facebook.py _fb_proxy().
+
+  Install (Mac):
+    cp scripts/launchd/net.willowisp.haystack-fbproxy.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.willowisp.haystack-fbproxy.plist
+  Reload after edits:
+    launchctl bootout gui/$(id -u)/net.willowisp.haystack-fbproxy
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/net.willowisp.haystack-fbproxy.plist
+  Logs: ~/Library/Logs/haystack-fbproxy.log (autossh is silent when healthy)
+
+  Requires: brew install autossh; ~/.ssh/haystack.pem present.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>net.willowisp.haystack-fbproxy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/autossh</string>
+        <string>-M</string>
+        <string>0</string>
+        <string>-N</string>
+        <string>-R</string>
+        <string>127.0.0.1:1080</string>
+        <string>-o</string>
+        <string>ServerAliveInterval=30</string>
+        <string>-o</string>
+        <string>ServerAliveCountMax=3</string>
+        <string>-o</string>
+        <string>ExitOnForwardFailure=yes</string>
+        <string>-o</string>
+        <string>StrictHostKeyChecking=accept-new</string>
+        <string>-o</string>
+        <string>BatchMode=yes</string>
+        <string>-i</string>
+        <string>/Users/joshua/.ssh/haystack.pem</string>
+        <string>ec2-user@54.193.192.73</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AUTOSSH_GATETIME</key>
+        <string>0</string>
+        <key>AUTOSSH_PATH</key>
+        <string>/usr/bin/ssh</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/joshua/Library/Logs/haystack-fbproxy.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/joshua/Library/Logs/haystack-fbproxy.log</string>
+</dict>
+</plist>
