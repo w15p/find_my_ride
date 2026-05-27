@@ -1,0 +1,26 @@
+# Terraform state files — never commit these
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Terraform working directory
+.terraform/
+.terraform.lock.hcl
+
+# Variable files with real values — gitignored by default.
+# Only *.tfvars.example is safe to commit (no real IPs, emails, key names).
+*.tfvars
+!*.tfvars.example
+
+# Crash log files
+crash.log
+crash.*.log
+
+# Generated plan files (can contain secrets in plaintext)
+*.tfplan
+
+# Override files — local developer overrides, not for sharing
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

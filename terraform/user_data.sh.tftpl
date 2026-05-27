@@ -1,0 +1,557 @@
+#!/usr/bin/env bash
+# Haystack bootstrap — runs once on first boot (EC2 user-data).
+# Amazon Linux 2023, x86_64, t3.micro.
+#
+# This script is idempotent where noted; re-running it on a running instance
+# is safe but not required (user-data only executes automatically on first boot).
+# To re-run manually: sudo bash /var/lib/cloud/instance/scripts/part-001
+#
+# Template variables (filled by Terraform templatefile() — use $${var} syntax
+# in this comment because terraform would otherwise try to interpolate it):
+#   data_device  — e.g. /dev/sdf (NVMe instances remap to /dev/nvme1n1)
+#   repo_url     — git remote URL for the app repo
+#   aws_region   — us-west-1
+#
+# Shell variables in this script use $VAR or $${VAR} (no braces conflict with
+# Terraform's interpolation syntax in .tftpl files; double-dollar escapes it).
+
+set -euo pipefail
+exec > >(tee /var/log/haystack-bootstrap.log | logger -t haystack-bootstrap) 2>&1
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
+log "=== Haystack bootstrap starting ==="
+
+AWS_REGION="${aws_region}"
+REPO_URL="${repo_url}"
+DATA_DEVICE="${data_device}"  # logical device; NVMe kernel renames to nvme*n1
+APP_DIR="/opt/haystack"
+DATA_DIR="/var/lib/haystack"
+APP_USER="haystack"
+VENV="$APP_DIR/.venv"
+
+# ── 1. System update + package install ───────────────────────────────────────
+log "Step 1: System update and package install"
+
+dnf update -y
+
+# Core build tools + Python 3.13 + Node 20 (LTS)
+# Playwright Chromium system deps (nss, atk, libX*, etc.) must be installed
+# before `playwright install-deps` so it can verify they are present.
+dnf install -y \
+    git \
+    python3.13 \
+    python3.13-pip \
+    python3.13-devel \
+    gcc \
+    gcc-c++ \
+    make \
+    nodejs \
+    npm \
+    jq \
+    util-linux \
+    xorg-x11-server-Xvfb \
+    nss \
+    atk \
+    at-spi2-atk \
+    libXcomposite \
+    libXdamage \
+    libXrandr \
+    libgbm \
+    libXfixes \
+    libXtst \
+    libxkbcommon \
+    pango \
+    cups-libs \
+    alsa-lib
+
+# Caddy — from the official Caddy COPR repository for AL2023.
+# If COPR is unavailable, fall back to downloading the binary from GitHub Releases.
+log "Installing Caddy web server"
+if ! dnf copr enable -y @caddy/caddy 2>/dev/null; then
+    log "COPR unavailable — downloading Caddy binary from GitHub Releases"
+    CADDY_VERSION="2.8.4"
+    curl -fsSL "https://github.com/caddyserver/caddy/releases/download/v$CADDY_VERSION/caddy_$${CADDY_VERSION}_linux_amd64.tar.gz" \
+        -o /tmp/caddy.tar.gz
+    tar -xzf /tmp/caddy.tar.gz -C /tmp caddy
+    install -m 0755 /tmp/caddy /usr/local/bin/caddy
+    rm -f /tmp/caddy.tar.gz /tmp/caddy
+    useradd --system --home /var/lib/caddy --shell /sbin/nologin caddy 2>/dev/null || true
+    cat > /etc/systemd/system/caddy.service <<'CADDY_UNIT'
+[Unit]
+Description=Caddy web server
+Documentation=https://caddyserver.com/docs/
+After=network.target network-online.target
+Requires=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+PrivateTmp=true
+ProtectSystem=full
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+CADDY_UNIT
+else
+    dnf install -y caddy
+fi
+
+mkdir -p /etc/caddy
+
+# ── 2. Format and mount data volume ──────────────────────────────────────────
+# The data_device variable is the logical name (/dev/sdf). On NVMe-capable
+# instances (all t3.* types), the kernel maps /dev/sdf → /dev/nvme1n1.
+# We use lsblk to find the actual kernel device name dynamically.
+log "Step 2: Mounting data volume"
+
+ACTUAL_DEVICE=""
+for i in $(seq 1 30); do
+    ACTUAL_DEVICE=$(lsblk -dno NAME,SIZE | awk '$2 == "20G" {print "/dev/"$1}' | head -1)
+    if [ -n "$ACTUAL_DEVICE" ] && [ -b "$ACTUAL_DEVICE" ]; then
+        break
+    fi
+    log "Waiting for data volume... attempt $i/30"
+    sleep 2
+done
+
+if [ -z "$ACTUAL_DEVICE" ] || [ ! -b "$ACTUAL_DEVICE" ]; then
+    log "ERROR: Data volume not found after 60s. Check EBS attachment. Continuing without data mount."
+    SKIP_DATA_MOUNT=1
+else
+    log "Found data volume at $ACTUAL_DEVICE"
+    SKIP_DATA_MOUNT=0
+fi
+
+if [ "$SKIP_DATA_MOUNT" = "0" ]; then
+    FS_TYPE=$(blkid -o value -s TYPE "$ACTUAL_DEVICE" 2>/dev/null || true)
+    if [ -z "$FS_TYPE" ]; then
+        log "Formatting $ACTUAL_DEVICE as ext4 (first boot only)"
+        mkfs.ext4 -L haystack-data "$ACTUAL_DEVICE"
+    else
+        log "Device $ACTUAL_DEVICE already formatted as $FS_TYPE — skipping mkfs"
+    fi
+
+    mkdir -p "$DATA_DIR"
+
+    if ! mountpoint -q "$DATA_DIR"; then
+        mount "$ACTUAL_DEVICE" "$DATA_DIR"
+        log "Mounted $ACTUAL_DEVICE at $DATA_DIR"
+    else
+        log "$DATA_DIR already mounted"
+    fi
+
+    if ! grep -q "haystack-data" /etc/fstab; then
+        echo "LABEL=haystack-data  $DATA_DIR  ext4  defaults,nofail  0  2" >> /etc/fstab
+        log "Added $DATA_DIR to /etc/fstab"
+    fi
+fi
+
+# ── 3. Create haystack system user ───────────────────────────────────────────
+log "Step 3: Creating haystack system user"
+if ! id "$APP_USER" &>/dev/null; then
+    useradd \
+        --system \
+        --home-dir "$DATA_DIR" \
+        --no-create-home \
+        --shell /sbin/nologin \
+        "$APP_USER"
+    log "Created user $APP_USER"
+else
+    log "User $APP_USER already exists"
+fi
+
+if [ "$SKIP_DATA_MOUNT" = "0" ]; then
+    chown -R "$APP_USER:$APP_USER" "$DATA_DIR"
+    chmod 0700 "$DATA_DIR"
+fi
+
+# ── 4. Clone application repository ──────────────────────────────────────────
+log "Step 4: Cloning application repository"
+if [ -d "$APP_DIR/.git" ]; then
+    log "Repository already cloned at $APP_DIR — pulling latest"
+    git -C "$APP_DIR" pull --ff-only || log "WARN: git pull failed; using existing checkout"
+else
+    git clone "$REPO_URL" "$APP_DIR"
+    log "Cloned $REPO_URL to $APP_DIR"
+fi
+
+chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+
+# ── 5. Python virtual environment + dependencies ──────────────────────────────
+log "Step 5: Python venv + requirements"
+
+if [ ! -f "$VENV/bin/python" ]; then
+    python3.13 -m venv "$VENV"
+    log "Created venv at $VENV"
+fi
+
+"$VENV/bin/pip" install --quiet --upgrade pip
+"$VENV/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
+log "Python requirements installed"
+
+# ── 6. Playwright Chromium ────────────────────────────────────────────────────
+log "Step 6: Playwright Chromium install"
+PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+export PLAYWRIGHT_BROWSERS_PATH
+
+"$VENV/bin/playwright" install chromium
+"$VENV/bin/playwright" install-deps chromium
+log "Playwright Chromium installed"
+
+# ── 7. Frontend build ─────────────────────────────────────────────────────────
+log "Step 7: React frontend build"
+WEB_DIR="$APP_DIR/webapp/web"
+if [ -d "$WEB_DIR" ]; then
+    cd "$WEB_DIR"
+    npm install --silent
+    npm run build
+    log "Frontend built to $WEB_DIR/dist"
+    cd /
+else
+    log "WARN: $WEB_DIR not found — skipping frontend build"
+fi
+
+# ── 8. Pull secrets from SSM → .env ──────────────────────────────────────────
+log "Step 8: Fetching secrets from SSM Parameter Store"
+
+mkdir -p "$APP_DIR/scripts"
+
+cat > "$APP_DIR/scripts/refresh-env.sh" <<'REFRESH_EOF'
+#!/usr/bin/env bash
+# Refresh /opt/haystack/.env from SSM Parameter Store.
+# Re-run after rotating a secret: sudo bash /opt/haystack/scripts/refresh-env.sh
+set -euo pipefail
+ENV_FILE="/opt/haystack/.env"
+REGION="us-west-1"
+
+aws ssm get-parameters-by-path \
+    --path "/haystack/prod/" \
+    --with-decryption \
+    --recursive \
+    --region "$REGION" \
+    --query "Parameters[].{Name:Name,Value:Value}" \
+    --output json \
+  | jq -r '.[] | select(.Value != "PLACEHOLDER_SET_VIA_CLI") | (.Name | split("/") | last) + "=" + .Value' \
+  > "$ENV_FILE"
+# Skip placeholder-valued params so scrapers fall through to their no-creds
+# code paths (e.g. Marktplaats HTML fallback) instead of trying to auth with
+# the literal string "PLACEHOLDER_SET_VIA_CLI".
+
+chmod 600 "$ENV_FILE"
+chown haystack:haystack "$ENV_FILE"
+echo "$(date): .env refreshed from SSM" >> /var/log/haystack-bootstrap.log
+REFRESH_EOF
+
+chmod 0755 "$APP_DIR/scripts/refresh-env.sh"
+chown root:root "$APP_DIR/scripts/refresh-env.sh"
+
+bash "$APP_DIR/scripts/refresh-env.sh" || \
+    log "WARN: SSM fetch failed — secrets may still be placeholders. Run refresh-env.sh after setting real values via aws ssm put-parameter."
+
+# ── 9. Data directory symlinks ────────────────────────────────────────────────
+log "Step 9: Creating data directory symlinks"
+
+if [ "$SKIP_DATA_MOUNT" = "0" ]; then
+    mkdir -p "$DATA_DIR/.fb_profile"
+    mkdir -p "$DATA_DIR/cache"
+    touch "$DATA_DIR/listings.db" 2>/dev/null || true
+    chown -R "$APP_USER:$APP_USER" "$DATA_DIR"
+
+    for target in listings.db .fb_profile cache; do
+        src="$APP_DIR/$target"
+        dst="$DATA_DIR/$target"
+        if [ -e "$src" ] && [ ! -L "$src" ]; then
+            log "Moving existing $src to $dst"
+            mv "$src" "$dst"
+        fi
+        if [ ! -L "$src" ]; then
+            ln -s "$dst" "$src"
+            log "Symlinked $src → $dst"
+        else
+            log "$src already symlinked"
+        fi
+    done
+fi
+
+# ── 10. Systemd service units ─────────────────────────────────────────────────
+# Note: heredoc delimiters are unquoted so shell variables ($APP_USER, $APP_DIR,
+# $VENV) expand into the unit files. This is intentional — the paths are set
+# above and should be baked into the unit files.
+log "Step 10: Installing systemd units"
+
+mkdir -p /var/log/haystack
+chown "$APP_USER:$APP_USER" /var/log/haystack
+
+# haystack-web: FastAPI + React review app on :8002
+cat > /etc/systemd/system/haystack-web.service <<UNIT
+[Unit]
+Description=Haystack web review app (FastAPI + Uvicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
+ExecStart=$VENV/bin/python run.py --serve-web
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/haystack/web.log
+StandardError=append:/var/log/haystack/web.log
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# haystack-scrape: main scrape → filter → dedupe → save
+cat > /etc/systemd/system/haystack-scrape.service <<UNIT
+[Unit]
+Description=Haystack marketplace scraper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
+Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright"
+ExecStart=$VENV/bin/python run.py
+StandardOutput=append:/var/log/haystack/scrape.log
+StandardError=append:/var/log/haystack/scrape.log
+# Facebook scraper can legitimately take 3-4h for the 23-anchor sweep.
+# The in-code watchdog (core/watchdog.py) handles per-site budgets.
+TimeoutStartSec=18000
+UNIT
+
+cat > /etc/systemd/system/haystack-scrape.timer <<UNIT
+[Unit]
+Description=Run haystack scraper every 4 hours with random drift
+
+[Timer]
+# Fire at 00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC
+# systemd RandomizedDelaySec replaces cron_run.sh's perl-based drift.
+OnCalendar=*-*-* 00,04,08,12,16,20:00:00
+RandomizedDelaySec=2400
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+# haystack-digest: email digest + pre-validate (chains --validate internally)
+cat > /etc/systemd/system/haystack-digest.service <<UNIT
+[Unit]
+Description=Haystack daily email digest
+
+[Service]
+Type=oneshot
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
+Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright"
+ExecStart=$VENV/bin/python run.py --send-digest
+StandardOutput=append:/var/log/haystack/digest.log
+StandardError=append:/var/log/haystack/digest.log
+TimeoutStartSec=7200
+UNIT
+
+cat > /etc/systemd/system/haystack-digest.timer <<UNIT
+[Unit]
+Description=Haystack daily digest at 07:40 UTC (~00:40 Pacific)
+
+[Timer]
+# 07:40 UTC = 00:40 Pacific. Mirrors the `40 7 * * *` cron schedule.
+# RandomizedDelaySec adds up to ±20min jitter.
+OnCalendar=*-*-* 07:40:00
+RandomizedDelaySec=1200
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+# haystack-mine: pattern miner (Tier 1 — suggest reject keywords from rejects)
+cat > /etc/systemd/system/haystack-mine.service <<UNIT
+[Unit]
+Description=Haystack pattern miner (suggest reject keywords)
+
+[Service]
+Type=oneshot
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
+ExecStart=$VENV/bin/python run.py --mine-suggestions
+StandardOutput=append:/var/log/haystack/mine.log
+StandardError=append:/var/log/haystack/mine.log
+TimeoutStartSec=600
+UNIT
+
+cat > /etc/systemd/system/haystack-mine.timer <<UNIT
+[Unit]
+Description=Run pattern miner weekly (Sunday 06:00 UTC)
+
+[Timer]
+OnCalendar=Sun *-*-* 06:00:00
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+# haystack-refresh-fb-images: refresh expiring Facebook CDN image URLs.
+# Facebook signs CDN URLs with a ~24-48h TTL (oe= param); without this job
+# the review app shows broken images within a day or two of scraping.
+cat > /etc/systemd/system/haystack-refresh-fb-images.service <<UNIT
+[Unit]
+Description=Haystack — refresh expiring Facebook CDN image URLs
+
+[Service]
+Type=oneshot
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
+Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright"
+ExecStart=$VENV/bin/python run.py --refresh-fb-images
+StandardOutput=append:/var/log/haystack/refresh-fb-images.log
+StandardError=append:/var/log/haystack/refresh-fb-images.log
+TimeoutStartSec=3600
+UNIT
+
+cat > /etc/systemd/system/haystack-refresh-fb-images.timer <<UNIT
+[Unit]
+Description=Refresh FB image URLs every 12h
+
+[Timer]
+OnCalendar=*-*-* 03,15:00:00
+RandomizedDelaySec=900
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+# ── 11. Caddy + Cloudflare Origin CA TLS ──────────────────────────────────────
+# TLS material comes from SSM /haystack/tls/* (CF_ORIGIN_CERT, CF_ORIGIN_KEY),
+# generated once in the Cloudflare dashboard (SSL/TLS → Origin Server). 15-year
+# RSA cert. No Let's Encrypt, no HTTP-01 challenge, no port-80 dependency.
+#
+# Cloudflare must be configured to use SSL mode "Full (strict)" for this to
+# work end-to-end: CF accepts the Origin CA cert at the origin, edge users
+# get CF's universal cert.
+#
+# Rotation: regenerate in CF dashboard, aws ssm put-parameter --overwrite for
+# both names, then sudo bash /opt/haystack/scripts/refresh-tls.sh && systemctl reload caddy.
+
+log "Step 11a: Fetching Cloudflare Origin CA cert + key from SSM"
+
+mkdir -p /etc/caddy/tls
+chown root:caddy /etc/caddy/tls
+chmod 0750 /etc/caddy/tls
+
+cat > "$APP_DIR/scripts/refresh-tls.sh" <<'TLS_EOF'
+#!/usr/bin/env bash
+# Refresh /etc/caddy/tls/{cert.pem,key.pem} from SSM Parameter Store.
+# Re-run after rotating the CF Origin cert:
+#   sudo bash /opt/haystack/scripts/refresh-tls.sh && systemctl reload caddy
+set -euo pipefail
+REGION="us-west-1"
+TLS_DIR="/etc/caddy/tls"
+
+mkdir -p "$TLS_DIR"
+
+CERT=$(aws ssm get-parameter --name "/haystack/tls/CF_ORIGIN_CERT" --with-decryption --region "$REGION" --query "Parameter.Value" --output text)
+KEY=$(aws ssm get-parameter  --name "/haystack/tls/CF_ORIGIN_KEY"  --with-decryption --region "$REGION" --query "Parameter.Value" --output text)
+
+if [ "$CERT" = "PLACEHOLDER_SET_VIA_CLI" ] || [ "$KEY" = "PLACEHOLDER_SET_VIA_CLI" ]; then
+    echo "ERROR: CF Origin cert/key still placeholders. Generate at CF dashboard → SSL/TLS → Origin Server → Create Certificate, then aws ssm put-parameter --overwrite for /haystack/tls/CF_ORIGIN_CERT and /haystack/tls/CF_ORIGIN_KEY." >&2
+    exit 1
+fi
+
+# Atomic write so a partial fetch doesn't break Caddy mid-reload.
+umask 027
+printf '%s\n' "$CERT" > "$TLS_DIR/cert.pem.new"
+printf '%s\n' "$KEY"  > "$TLS_DIR/key.pem.new"
+chown root:caddy "$TLS_DIR/cert.pem.new" "$TLS_DIR/key.pem.new"
+chmod 0640 "$TLS_DIR/cert.pem.new" "$TLS_DIR/key.pem.new"
+mv "$TLS_DIR/cert.pem.new" "$TLS_DIR/cert.pem"
+mv "$TLS_DIR/key.pem.new"  "$TLS_DIR/key.pem"
+
+echo "$(date): TLS material refreshed from SSM" >> /var/log/haystack-bootstrap.log
+TLS_EOF
+
+chmod 0755 "$APP_DIR/scripts/refresh-tls.sh"
+chown root:root "$APP_DIR/scripts/refresh-tls.sh"
+
+# Best-effort first fetch. Bootstrap continues even on failure so the user
+# can SSH in and run refresh-tls.sh after populating SSM. Caddy will fail to
+# start without cert/key, but systemctl restart caddy fixes that one-shot.
+bash "$APP_DIR/scripts/refresh-tls.sh" || \
+    log "WARN: CF Origin TLS fetch failed — populate /haystack/tls/CF_ORIGIN_CERT and CF_ORIGIN_KEY, then bash refresh-tls.sh && systemctl restart caddy."
+
+log "Step 11b: Writing Caddy configuration"
+
+cat > /etc/caddy/Caddyfile <<'CADDY_EOF'
+# Haystack reverse proxy. TLS via Cloudflare Origin CA cert (managed via SSM
+# + refresh-tls.sh). No ACME, no port 80 needed.
+
+{
+    # Global: disable automatic HTTPS / ACME. Cert/key supplied below per-site.
+    auto_https off
+}
+
+haystack.willowisp.net:443 {
+    tls /etc/caddy/tls/cert.pem /etc/caddy/tls/key.pem
+    reverse_proxy localhost:8002
+
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}
+CADDY_EOF
+
+mkdir -p /var/log/caddy
+chown caddy:caddy /var/log/caddy 2>/dev/null || chown root:root /var/log/caddy
+
+# ── 12. Enable and start services ─────────────────────────────────────────────
+log "Step 12: Enabling systemd services and timers"
+
+systemctl daemon-reload
+
+systemctl enable --now caddy
+systemctl enable --now haystack-web
+
+systemctl enable --now haystack-scrape.timer
+systemctl enable --now haystack-digest.timer
+systemctl enable --now haystack-mine.timer
+systemctl enable --now haystack-refresh-fb-images.timer
+
+# Timers fire on schedule — we intentionally do NOT trigger scrape/digest/mine
+# immediately. The FB --fb-login must be done first, and the instance should
+# be stable before the first scrape tick.
+
+log "=== Haystack bootstrap complete ==="
+log ""
+log "Next steps:"
+log "  1. Add Cloudflare A record: haystack.willowisp.net → <EIP from terraform output>"
+log "  2. Populate SSM secrets (see: terraform output ssm_populate_commands)"
+log "  3. Refresh .env: sudo bash /opt/haystack/scripts/refresh-env.sh"
+log "  4. Rsync listings.db + .fb_profile/ from Mac (see: terraform output data_migration_commands)"
+log "  5. sudo systemctl restart haystack-web"
+log "  6. Verify: curl http://localhost:8002/api/stats"

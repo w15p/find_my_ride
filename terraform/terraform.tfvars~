@@ -1,0 +1,24 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored; this example file is safe to commit.
+
+# Your current public IP with /32 suffix — restricts SSH to your machine only.
+# Find it: curl -s https://checkip.amazonaws.com
+# IMPORTANT: leaving this as 0.0.0.0/0 opens SSH to the whole internet.
+admin_ip_cidr = "YOUR_IP_HERE/32"
+
+# Name of the EC2 key pair you created in us-west-1.
+# Create via CLI:
+#   aws ec2 create-key-pair --key-name haystack --region us-west-1 \
+#     --query 'KeyMaterial' --output text > ~/.ssh/haystack.pem
+#   chmod 600 ~/.ssh/haystack.pem
+ssh_key_name = "haystack"
+
+# Email for AWS Budget alerts (50%, 80%, 100% of monthly limit).
+notification_email = "joshua@willowisp.net"
+
+# Git remote URL for the app repository (defaults to the live remote, no need to set).
+# repo_url = "https://github.com/w15p/find_my_ride.git"
+
+# Monthly budget in USD. Default $10 covers year-1 (free tier EC2) comfortably.
+# Raise to $20 after the free tier year expires.
+monthly_budget_usd = 10
