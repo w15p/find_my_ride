@@ -618,7 +618,7 @@ def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
         return
     # Import here so the heavy `scrapers.facebook` module isn't loaded for
     # CLI commands that don't need it.
-    from scrapers.facebook import _read_dom_image
+    from scrapers.facebook import _read_dom_image, _fb_proxy
     from core import image_cache
 
     profile_dir = _fb_profile_dir(cfg)
@@ -635,6 +635,7 @@ def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
                     headless=True,
                     viewport={"width": 1366, "height": 768},
                     locale="en-GB",
+                    proxy=_fb_proxy(),
                 )
                 page = ctx.new_page()
                 for i, url in enumerate(urls, 1):
@@ -729,6 +730,7 @@ def _validate_facebook(cfg: dict, db: ListingDB, urls: list[str], sold_signals: 
         log.warning("Playwright not available — skipping FB validation: %s", exc)
         return
 
+    from scrapers.facebook import _check_session_valid, _fb_proxy
     profile_dir = _fb_profile_dir(cfg)
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
@@ -736,6 +738,7 @@ def _validate_facebook(cfg: dict, db: ListingDB, urls: list[str], sold_signals: 
             headless=True,
             viewport={"width": 1366, "height": 768},
             locale="en-GB",
+            proxy=_fb_proxy(),
         )
         page = ctx.new_page()
         # Bail early if the FB session has been invalidated. Without this
@@ -743,7 +746,6 @@ def _validate_facebook(cfg: dict, db: ListingDB, urls: list[str], sold_signals: 
         # waiting for content that never appears, and the cron process
         # holds the DB write lock — blocking reject/pin/note in the webapp.
         # Pattern caught after FB's 2026-05-19 forced logout.
-        from scrapers.facebook import _check_session_valid
         if not _check_session_valid(page, log):
             ctx.close()
             return

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import time
@@ -24,6 +25,21 @@ LHD_KEYWORDS = {
 
 def _profile_dir(config: dict) -> str:
     return config.get("profile_dir", ".fb_profile")
+
+
+def _fb_proxy() -> Optional[dict]:
+    """Playwright proxy config from the FB_PROXY env var, or None when unset.
+
+    Hosts that must route Facebook traffic through a trusted egress IP set
+    FB_PROXY to a SOCKS5 endpoint such as socks5://127.0.0.1:1080. The EC2
+    deploy does this because FB distrusts its datacenter IP and redirects
+    item pages to /login; routing through a residential IP avoids that. Unset
+    locally, so the Mac talks to FB directly. Passing proxy=None to
+    launch_persistent_context is equivalent to omitting it, so every FB launch
+    site can pass _fb_proxy() unconditionally.
+    """
+    server = os.environ.get("FB_PROXY")
+    return {"server": server} if server else None
 
 
 def _check_session_valid(page, log) -> bool:
@@ -94,6 +110,7 @@ class FacebookScraper(BaseScraper):
                 user_agent=random.choice(USER_AGENTS),
                 viewport={"width": 1366, "height": 768},
                 locale="en-GB",
+                proxy=_fb_proxy(),
             )
 
             search_page = ctx.new_page()
@@ -304,6 +321,7 @@ def fetch_watched_listings(
             user_agent=random.choice(USER_AGENTS),
             viewport={"width": 1366, "height": 768},
             locale="en-GB",
+            proxy=_fb_proxy(),
         )
         page = ctx.new_page()
         if not _check_session_valid(page, log):
