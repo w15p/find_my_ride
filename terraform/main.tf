@@ -73,17 +73,40 @@ resource "aws_route_table_association" "public" {
 #               this to Cloudflare IP ranges:
 #               https://www.cloudflare.com/ips/
 #
-# TODO: Add an ingress rule for each Cloudflare IP range and remove 0.0.0.0/0
-#       on :443 once CF Access is wired up. This prevents direct-IP access
-#       bypassing CF Access authentication entirely.
+# Cloudflare IPv4 origin ranges. Source of truth: https://www.cloudflare.com/ips-v4
+# These rarely change; the list below was last reviewed 2026-05-27. Refresh
+# annually or whenever CF announces a range change (subscribe to their
+# changelog). IPv6 ranges not included because our VPC is IPv4-only.
+locals {
+  cloudflare_ipv4 = [
+    "173.245.48.0/20",
+    "103.21.244.0/22",
+    "103.22.200.0/22",
+    "103.31.4.0/22",
+    "141.101.64.0/18",
+    "108.162.192.0/18",
+    "190.93.240.0/20",
+    "188.114.96.0/20",
+    "197.234.240.0/22",
+    "198.41.128.0/17",
+    "162.158.0.0/15",
+    "104.16.0.0/13",
+    "104.24.0.0/14",
+    "172.64.0.0/13",
+    "131.0.72.0/22",
+  ]
+}
 
 resource "aws_security_group" "haystack" {
   name        = "haystack-sg"
   # AWS rejects non-ASCII in GroupDescription (the em-dash bit us once).
+  # NB: SG descriptions are immutable in AWS; do not edit this string after
+  # initial apply or terraform will force a SG (and therefore instance)
+  # replacement.
   description = "Haystack app - SSH (admin only) + HTTPS (Cloudflare)"
   vpc_id      = aws_vpc.main.id
 
-  # SSH — admin only. Override admin_ip_cidr in terraform.tfvars.
+  # SSH: admin only. Override admin_ip_cidr in terraform.tfvars.
   ingress {
     description = "SSH admin access"
     from_port   = 22
@@ -92,13 +115,16 @@ resource "aws_security_group" "haystack" {
     cidr_blocks = [var.admin_ip_cidr]
   }
 
-  # HTTPS — Cloudflare origin traffic. TODO: restrict to CF IP ranges.
+  # HTTPS: Cloudflare-only. Direct-IP scans against the EIP get TCP RST
+  # at the network layer, well before the Caddy/uvicorn stack sees them.
+  # CF Access SSO sits in front of CF, so the only way to reach uvicorn
+  # is: browser -> CF (edge auth via Access) -> CF egress IP -> SG -> EC2.
   ingress {
-    description = "HTTPS via Cloudflare (TODO: restrict to CF IP ranges)"
+    description = "HTTPS from Cloudflare origin IPs only"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = local.cloudflare_ipv4
   }
 
   # All egress open — scraper needs to reach EU marketplaces, eBay API, SMTP,
@@ -286,12 +312,25 @@ resource "aws_instance" "haystack" {
     aws_region  = "us-west-1"
   }))
 
-  # Replacing user-data causes in-place instance replacement (destroy + create).
-  # This is intentional: user-data only runs on first boot, so changes to
-  # user-data don't take effect on a running instance anyway. A replacement
-  # gives us a fresh boot with the new script, which is the correct behavior.
+  # user_data only runs on first boot, so changes to the bootstrap script
+  # don't take effect on a running instance regardless. Ignoring changes here
+  # prevents an accidental terraform apply from destroying the instance and
+  # everything resident on the root volume (built React bundle, installed
+  # Python venv + Playwright Chromium, dnf state) just because we tweaked
+  # the bootstrap script for the NEXT instance replacement.
+  #
+  # When you DO need the new user-data to take effect, taint the instance
+  # explicitly: `terraform apply -replace=aws_instance.haystack`.
   lifecycle {
     create_before_destroy = true
+    ignore_changes = [
+      user_data_base64,
+      # When aws_eip_association attaches an EIP, AWS reports
+      # associate_public_ip_address=true on the instance, conflicting with
+      # our config-time false. Without this ignore, every `terraform apply`
+      # wants to recreate the instance to "correct" the drift. Harmless drift.
+      associate_public_ip_address,
+    ]
   }
 
   tags = {
