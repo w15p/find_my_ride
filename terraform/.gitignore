@@ -7,10 +7,19 @@
 .terraform/
 .terraform.lock.hcl
 
-# Variable files with real values — gitignored by default.
+# Variable files with real values - gitignored by default.
 # Only *.tfvars.example is safe to commit (no real IPs, emails, key names).
 *.tfvars
 !*.tfvars.example
+
+# Editor backup files (vim/emacs ~ suffix, .swp, .bak). The naive *.tfvars
+# pattern above misses terraform.tfvars~ - a real bug that got the example
+# template committed once. Catch all backup patterns here regardless of
+# extension.
+*~
+*.swp
+*.swo
+*.bak
 
 # Crash log files
 crash.log
