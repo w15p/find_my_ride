@@ -154,6 +154,13 @@ searches:
       - ebay
       - marktplaats
       - facebook
+    # AS24 is query-driven (make/model parsed from `query`: "ford escort mk1"
+    # resolves to ford/escort). The Mk1 year window still needs pinning here
+    # or the result pages fill with later Escort generations.
+    site_overrides:
+      autoscout24:
+        year_from: 1968
+        year_to: 1975
     # filters: — read from top-level `filters:` above (Commit 1 back-compat)
 
   rs2000_mexico_seats:

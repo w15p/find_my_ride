@@ -4,24 +4,99 @@ import random
 import re
 import time
 from typing import List, Optional
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 from core.http_client import USER_AGENTS
 from core.models import Listing
 from scrapers.base import BaseScraper
 
 BASE_URL = "https://www.autoscout24.com"
-SEARCH_URL = (
-    BASE_URL
-    + "/lst/ford/escort"
-    "?fregfrom=1968"
-    "&fregto=1975"
-    "&atype=C"
-    "&cy={countries}"
-    "&sort=age"    # newest first
-    "&desc=1"
-    "&page={page}"
-)
+# AutoScout24 organizes its catalogue by make/model URL slugs:
+#   /lst/<make>/<model>?...   e.g. /lst/ford/escort
+# We derive those slugs from the search query so any hunt, not just the
+# original Ford Escort, can drive this scraper.
+#
+# Two-word makes need an explicit map so "alfa romeo" is not split into
+# make="alfa", model="romeo". Common abbreviations are aliased too.
+_MULTI_WORD_MAKES = {
+    "alfa romeo": "alfa-romeo",
+    "aston martin": "aston-martin",
+    "land rover": "land-rover",
+    "mercedes benz": "mercedes-benz",
+    "rolls royce": "rolls-royce",
+    "great wall": "great-wall",
+}
+_MAKE_ALIASES = {
+    "alfa": "alfa-romeo",
+    "mercedes": "mercedes-benz",
+    "merc": "mercedes-benz",
+    "vw": "volkswagen",
+    "chevy": "chevrolet",
+    "beemer": "bmw",
+    "bimmer": "bmw",
+}
+# Tokens that may follow a make but never name an AS24 model slug (drive side,
+# Mk-generation marks). Keeps a junk segment out of the URL; these still drive
+# title filtering via required_keywords.
+_NON_MODEL_TOKENS = {
+    "lhd", "rhd", "left", "right", "hand", "drive",
+    "mk1", "mki", "mk2", "mkii", "mk3", "mkiii",
+}
+
+
+def _slug(token: str) -> str:
+    """Lowercase a token to an AS24 URL slug (alnum runs joined by hyphens)."""
+    return re.sub(r"[^a-z0-9]+", "-", token.lower()).strip("-")
+
+
+def _parse_make_model(query: str) -> tuple[str, Optional[str]]:
+    """Derive (make_slug, model_slug) from a freeform query string.
+
+    make = the longest leading match against known two-word makes, else the
+    first token (alias-resolved). model = the next token when it plausibly
+    names a model, else None (a make-only listing page, refined afterwards by
+    required_keywords title filtering). Only the single token after the make
+    is taken as the model, so multi-token models (e.g. BMW "3 series",
+    Mercedes "280 SL") lose their trailing words - set make/model explicitly
+    via site_overrides for those.
+    """
+    tokens = [t for t in re.split(r"\s+", query.strip().lower()) if t]
+    if not tokens:
+        return "", None
+    if len(tokens) >= 2 and f"{tokens[0]} {tokens[1]}" in _MULTI_WORD_MAKES:
+        make = _MULTI_WORD_MAKES[f"{tokens[0]} {tokens[1]}"]
+        consumed = 2
+    else:
+        make = _MAKE_ALIASES.get(tokens[0], _slug(tokens[0]))
+        consumed = 1
+    model = None
+    if len(tokens) > consumed and tokens[consumed] not in _NON_MODEL_TOKENS:
+        model = _slug(tokens[consumed])
+    return make, model
+
+
+def _build_search_url(
+    make: str,
+    model: Optional[str],
+    countries: str,
+    year_from: Optional[int],
+    year_to: Optional[int],
+    page: int,
+) -> str:
+    path = f"/lst/{make}/{model}" if model else f"/lst/{make}"
+    params: dict[str, str] = {}
+    if year_from is not None:
+        params["fregfrom"] = str(year_from)
+    if year_to is not None:
+        params["fregto"] = str(year_to)
+    params.update({
+        "atype": "C",
+        "cy": countries,
+        "sort": "age",   # newest first
+        "desc": "1",
+        "page": str(page),
+    })
+    return BASE_URL + path + "?" + urlencode(params, safe=",")
 
 COOKIE_CONSENT_SELECTOR = '[data-testid="as24-cmp-accept-all-button"], #as24-cmp-accept-all'
 # AS24 redesigned their results UI in 2026; the listing card wrapper is now
@@ -40,6 +115,32 @@ class AutoScout24Scraper(BaseScraper):
         max_pages = self.config.get("max_pages", 10)
         timeout = self.config.get("playwright_timeout", 45000)
 
+        # Derive the AS24 make/model slugs from the search query so this
+        # scraper follows whatever hunt is configured, not just Ford Escort.
+        # Explicit site_overrides (make/model/year_from/year_to) win over the
+        # parsed query; the year window otherwise falls back to site config.
+        make = self.extra_params.get("make") or ""
+        model = self.extra_params.get("model")
+        if not make:
+            make, parsed_model = _parse_make_model(self.query)
+            if model is None:
+                model = parsed_model
+        if not make:
+            self.log.warning(
+                "AutoScout24: no make derivable from query %r - skipping site",
+                self.query,
+            )
+            return []
+        self._year_from = self.extra_params.get("year_from", self.config.get("year_from"))
+        self._year_to = self.extra_params.get("year_to", self.config.get("year_to"))
+        year_from, year_to = self._year_from, self._year_to
+        self.log.info(
+            "AutoScout24 search: make=%s model=%s years=%s-%s",
+            make, model or "(any)",
+            year_from if year_from is not None else "",
+            year_to if year_to is not None else "",
+        )
+
         results: List[Listing] = []
 
         with sync_playwright() as p:
@@ -52,7 +153,7 @@ class AutoScout24Scraper(BaseScraper):
             page = context.new_page()
 
             for page_num in range(1, max_pages + 1):
-                url = SEARCH_URL.format(countries=countries, page=page_num)
+                url = _build_search_url(make, model, countries, year_from, year_to, page_num)
                 self.log.info("AutoScout24 page %d: %s", page_num, url)
 
                 try:
@@ -128,8 +229,11 @@ class AutoScout24Scraper(BaseScraper):
             # Parse year from the card's full text — AutoScout24 shows "MM/YYYY"
             full_text = card.inner_text()
             year = _extract_year_from_text(full_text)
-            if year is not None and not (1968 <= year <= 1975):
-                return None
+            if year is not None:
+                if self._year_from is not None and year < self._year_from:
+                    return None
+                if self._year_to is not None and year > self._year_to:
+                    return None
 
             # Price
             price_el = card.query_selector("[data-testid*='price'], [class*='price']")
@@ -179,11 +283,11 @@ class AutoScout24Scraper(BaseScraper):
 
 def _extract_year_from_text(text: str) -> Optional[int]:
     """AutoScout24 shows registration as MM/YYYY — extract the year."""
-    match = re.search(r"\b\d{2}/(19[5-9]\d|200\d|201\d)\b", text)
+    match = re.search(r"\b\d{2}/(19[5-9]\d|20[0-2]\d)\b", text)
     if match:
         return int(match.group(1))
     # Fallback: bare year
-    match = re.search(r"\b(19[5-9]\d|200\d|201\d)\b", text)
+    match = re.search(r"\b(19[5-9]\d|20[0-2]\d)\b", text)
     return int(match.group(1)) if match else None
 
 
