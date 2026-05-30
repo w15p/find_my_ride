@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS listings (
     user_price_currency TEXT,
     description_language    TEXT,
     description_translated  TEXT,
+    prev_price_value    INTEGER,
+    price_changed_at    TEXT,
+    price_checked_at    TEXT,
     scraped_at      TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'active',
     sold_at         TEXT
@@ -77,6 +80,7 @@ CREATE TABLE IF NOT EXISTS tenant_listing_state (
     user_year           INTEGER,
     user_price_currency TEXT,
     user_price_value    INTEGER,
+    user_price_at       TEXT,
     PRIMARY KEY (tenant_id, listing_url)
 );
 
@@ -228,6 +232,9 @@ _MIGRATIONS = [
     ("user_price_value",   "ALTER TABLE listings ADD COLUMN user_price_value INTEGER"),
     ("description_language",   "ALTER TABLE listings ADD COLUMN description_language TEXT"),
     ("description_translated", "ALTER TABLE listings ADD COLUMN description_translated TEXT"),
+    ("prev_price_value",       "ALTER TABLE listings ADD COLUMN prev_price_value INTEGER"),
+    ("price_changed_at",       "ALTER TABLE listings ADD COLUMN price_changed_at TEXT"),
+    ("price_checked_at",       "ALTER TABLE listings ADD COLUMN price_checked_at TEXT"),
 ]
 
 # Same idempotent ALTER pattern for tenant_listing_state. SCHEMA_SEARCHES
@@ -236,6 +243,7 @@ _MIGRATIONS = [
 # before the column was added.
 _TLS_MIGRATIONS = [
     ("user_price_value", "ALTER TABLE tenant_listing_state ADD COLUMN user_price_value INTEGER"),
+    ("user_price_at",    "ALTER TABLE tenant_listing_state ADD COLUMN user_price_at TEXT"),
 ]
 
 
