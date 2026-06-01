@@ -1,0 +1,17 @@
+[Unit]
+Description=Haystack daily email digest
+
+[Service]
+Type=oneshot
+User=haystack
+Group=haystack
+WorkingDirectory=/opt/haystack
+EnvironmentFile=/opt/haystack/.env
+Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright"
+# --no-validate: validation is its own unit (haystack-validate.service) so a
+# slow FB validate (proxy adds real latency per goto) can never block or kill
+# the email send. Digest = read the DB and email - a few seconds of work.
+ExecStart=/opt/haystack/.venv/bin/python run.py --send-digest --no-validate
+StandardOutput=append:/var/log/haystack/digest.log
+StandardError=append:/var/log/haystack/digest.log
+TimeoutStartSec=300

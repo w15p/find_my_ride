@@ -1,0 +1,14 @@
+[Unit]
+Description=Run haystack-validate.service nightly at 05:00 UTC
+
+[Timer]
+# 05:00 UTC leaves ~2.5h before haystack-digest.timer fires at 07:40 UTC -
+# enough headroom even for a slow FB validate run through the home tunnel.
+# RandomizedDelaySec spreads load if other haystack-* timers also fire near
+# this window in the future.
+OnCalendar=*-*-* 05:00:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

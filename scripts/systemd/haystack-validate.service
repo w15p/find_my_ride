@@ -1,0 +1,19 @@
+[Unit]
+Description=Haystack active-listing validation (mark sold/expired)
+
+[Service]
+Type=oneshot
+User=haystack
+Group=haystack
+WorkingDirectory=/opt/haystack
+EnvironmentFile=/opt/haystack/.env
+Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright"
+# Decoupled from haystack-digest 2026-06-01 - FB validate goes through the
+# home reverse-SOCKS tunnel now and was tripping the in-digest watchdog,
+# killing the email send. Standalone, its OperationTimeout is logged and the
+# rest of the pipeline carries on. Timeout sized for ~71 FB listings at the
+# proxy-slowed pace plus the HTTP-site validate budget.
+ExecStart=/opt/haystack/.venv/bin/python run.py --validate
+StandardOutput=append:/var/log/haystack/validate.log
+StandardError=append:/var/log/haystack/validate.log
+TimeoutStartSec=7200
