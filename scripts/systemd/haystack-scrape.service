@@ -1,0 +1,23 @@
+[Unit]
+Description=Haystack marketplace scraper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=haystack
+Group=haystack
+WorkingDirectory=/opt/haystack
+EnvironmentFile=/opt/haystack/.env
+Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright"
+ExecStart=/opt/haystack/.venv/bin/python run.py
+StandardOutput=append:/var/log/haystack/scrape.log
+StandardError=append:/var/log/haystack/scrape.log
+TimeoutStartSec=18000
+
+# Resource caps: stops a Playwright/Chromium overrun from starving sshd and
+# systemd-logind (the recurring banner-exchange hang we keep rebooting from).
+# See haystack-validate.service for the same rationale.
+MemoryMax=500M
+TasksMax=200
+OOMScoreAdjust=500
