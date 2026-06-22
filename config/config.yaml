@@ -210,27 +210,46 @@ searches:
       year_to: null
       # FB Marketplace injects locale-personalized listings based on the
       # request's egress IP (the home reverse-SOCKS tunnel exits on a US
-      # residential IP). Restrict to EU + UK markets where seat parts are
-      # practical to receive. Listings whose country_code is unknown are NOT
-      # blocked (the filter only excludes when we positively know the
-      # country); add more codes if a legitimate market is being dropped.
+      # residential IP). Restrict to Europe (EU + EEA + UK + Switzerland)
+      # where seat parts are practical to receive. Listings whose
+      # country_code is unknown are NOT blocked (the filter only excludes
+      # when we positively know the country).
       allowed_country_codes:
-        - GB
-        - IE
-        - DE
-        - FR
-        - NL
-        - BE
-        - LU
-        - IT
-        - ES
-        - PT
-        - AT
-        - CH
-        - DK
-        - SE
-        - 'NO'    # quoted: YAML parses bare NO as the boolean false
-        - FI
+        # EU 27
+        - AT  # Austria
+        - BE  # Belgium
+        - BG  # Bulgaria
+        - CY  # Cyprus
+        - CZ  # Czechia
+        - DE  # Germany
+        - DK  # Denmark
+        - EE  # Estonia
+        - ES  # Spain
+        - FI  # Finland
+        - FR  # France
+        - GR  # Greece
+        - HR  # Croatia
+        - HU  # Hungary
+        - IE  # Ireland
+        - IT  # Italy
+        - LT  # Lithuania
+        - LU  # Luxembourg
+        - LV  # Latvia
+        - MT  # Malta
+        - NL  # Netherlands
+        - PL  # Poland
+        - PT  # Portugal
+        - RO  # Romania
+        - SE  # Sweden
+        - SI  # Slovenia
+        - SK  # Slovakia
+        # EEA non-EU
+        - IS  # Iceland
+        - LI  # Liechtenstein
+        - 'NO'  # Norway - quoted: YAML parses bare NO as the boolean false
+        # Other European
+        - CH  # Switzerland
+        - GB  # United Kingdom
       # Seeded from the first scrape's manual rejections (all evidenced as
       # rejected, zero kept). Each phrase intentionally specific enough that
       # it doesn't collateral-damage seat-cover or full-interior-set listings.
