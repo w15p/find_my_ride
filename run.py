@@ -218,6 +218,22 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
             log.debug("Reject (over $%d USD: $%.0f): %s", max_usd, usd, listing.url)
             return False
 
+    # Country allowlist: drop listings whose seller country isn't in the
+    # configured set. The seats hunt needs this because FB Marketplace
+    # injects locale-personalized results based on the request's egress IP
+    # (the home reverse-SOCKS tunnel exits on a residential US IP, so FB
+    # serves California listings alongside the explicit European anchors).
+    # Missing country_code is treated as "unknown, not blocked" - some
+    # scrapers don't reliably set it, so we only exclude when we positively
+    # know the country.
+    allowed = filt.get("allowed_country_codes")
+    if allowed:
+        allowed_upper = {c.upper() for c in allowed}
+        cc = (listing.country_code or "").upper()
+        if cc and cc not in allowed_upper:
+            log.debug("Reject (country %s not in allowlist): %s", cc, listing.url)
+            return False
+
     return True
 
 

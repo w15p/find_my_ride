@@ -208,6 +208,29 @@ searches:
       # Seats don't have meaningful years; skip the cars-style year window.
       year_from: null
       year_to: null
+      # FB Marketplace injects locale-personalized listings based on the
+      # request's egress IP (the home reverse-SOCKS tunnel exits on a US
+      # residential IP). Restrict to EU + UK markets where seat parts are
+      # practical to receive. Listings whose country_code is unknown are NOT
+      # blocked (the filter only excludes when we positively know the
+      # country); add more codes if a legitimate market is being dropped.
+      allowed_country_codes:
+        - GB
+        - IE
+        - DE
+        - FR
+        - NL
+        - BE
+        - LU
+        - IT
+        - ES
+        - PT
+        - AT
+        - CH
+        - DK
+        - SE
+        - 'NO'    # quoted: YAML parses bare NO as the boolean false
+        - FI
       # Seeded from the first scrape's manual rejections (all evidenced as
       # rejected, zero kept). Each phrase intentionally specific enough that
       # it doesn't collateral-damage seat-cover or full-interior-set listings.
