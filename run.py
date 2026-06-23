@@ -724,7 +724,25 @@ def _prefetch_image_to_cache(img_url: str) -> bool:
         return False
 
 
+# FB now renders recommendation tiles (Today's picks, similar listings,
+# more-from-this-seller) INSIDE [role="main"], not in the sidebar where they
+# used to live. Each tile can carry its own "Sold" badge which has nothing
+# to do with the listing being validated. Truncate the body at the first
+# recommendation-section header before searching for the sold line.
+_FB_RECOMMENDATION_HEADERS = (
+    "Today's picks",
+    "More from this seller",
+    "Similar listings",
+    "Suggested items",
+    "More items",
+)
+
+
 def _is_fb_sold(body_text: str, generic_signals: list[str]) -> bool:
+    cutoffs = [body_text.find(h) for h in _FB_RECOMMENDATION_HEADERS]
+    cutoffs = [i for i in cutoffs if i != -1]
+    if cutoffs:
+        body_text = body_text[:min(cutoffs)]
     if _FB_SOLD_LINE.search(body_text):
         return True
     return _is_sold_by_text(body_text, generic_signals)

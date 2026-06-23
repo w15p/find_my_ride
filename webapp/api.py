@@ -218,7 +218,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/listings")
     def list_listings(
-        status: Optional[str] = "active",
+        status: Optional[str] = None,    # None = no filter; api.js omits when "" so this maps to FilterBar's "All status"
         rejected: Optional[int] = 0,        # 0 = hide rejected, 1 = only rejected, -1 = both
         canonical: Optional[int] = 1,       # 1 = canonical only, 0 = include dups, -1 = both
         site: Optional[str] = None,
