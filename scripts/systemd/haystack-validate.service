@@ -24,6 +24,6 @@ TimeoutStartSec=7200
 # - TasksMax: Chromium fans out many threads/processes; cap them.
 # - OOMScoreAdjust: under system memory pressure, the OOM killer scores this
 #   unit +500, making it a preferred target before sshd/logind (default 0).
-MemoryMax=500M
+MemoryMax=1500M
 TasksMax=200
 OOMScoreAdjust=500

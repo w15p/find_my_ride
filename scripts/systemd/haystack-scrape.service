@@ -18,6 +18,6 @@ TimeoutStartSec=18000
 # Resource caps: stops a Playwright/Chromium overrun from starving sshd and
 # systemd-logind (the recurring banner-exchange hang we keep rebooting from).
 # See haystack-validate.service for the same rationale.
-MemoryMax=500M
+MemoryMax=1500M
 TasksMax=200
 OOMScoreAdjust=500
