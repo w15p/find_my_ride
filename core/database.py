@@ -300,6 +300,7 @@ class ListingDB:
             self._migrate_orphan_backfill()
             self._migrate_pattern_miner()
             self._migrate_watched_urls()
+            self._migrate_alfa_gt_junior_search()
             return
 
         now = datetime.utcnow().isoformat()
