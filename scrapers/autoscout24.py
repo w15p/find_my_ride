@@ -84,25 +84,30 @@ def _build_search_url(
     page: int,
 ) -> str:
     path = f"/lst/{make}/{model}" if model else f"/lst/{make}"
-    params: dict[str, str] = {}
+    # AS24 moved from comma-joined `cy=D,NL,B,F,GB` to REPEATED `cy=D&cy=NL&...`
+    # sometime in mid-2026. The old form returns zero results (which was the
+    # actual cause of "0 total listings" from every scrape until this fix).
+    # Emit one cy=X per country by using a list of tuples instead of a dict.
+    params: list[tuple[str, str]] = []
     if year_from is not None:
-        params["fregfrom"] = str(year_from)
+        params.append(("fregfrom", str(year_from)))
     if year_to is not None:
-        params["fregto"] = str(year_to)
-    params.update({
-        "atype": "C",
-        "cy": countries,
-        "sort": "age",   # newest first
-        "desc": "1",
-        "page": str(page),
-    })
-    return BASE_URL + path + "?" + urlencode(params, safe=",")
+        params.append(("fregto", str(year_to)))
+    params.append(("atype", "C"))
+    for cc in (c.strip() for c in countries.split(",") if c.strip()):
+        params.append(("cy", cc))
+    params.append(("sort", "age"))   # newest first
+    params.append(("desc", "1"))
+    params.append(("page", str(page)))
+    return BASE_URL + path + "?" + urlencode(params)
 
 COOKIE_CONSENT_SELECTOR = '[data-testid="as24-cmp-accept-all-button"], #as24-cmp-accept-all'
-# AS24 redesigned their results UI in 2026; the listing card wrapper is now
-# `[data-testid="sr-listing-card"]` (a div), no longer `<article>`. The grid
-# container `sr-listing-cards-grid` wraps them.
-LISTING_SELECTOR = '[data-testid="sr-listing-card"]'
+# AS24 redesigned again mid-2026: the listing card wrapper is now
+# `<article data-testid="...">` (they went back to the `<article>` element
+# they used before the 2025 redesign). The previous `sr-listing-card`
+# testid returns zero elements now, which had been silently making every
+# AS24 scrape return "0 total listings" without any error signal.
+LISTING_SELECTOR = 'article[data-testid]'
 
 
 class AutoScout24Scraper(BaseScraper):
