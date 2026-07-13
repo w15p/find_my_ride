@@ -283,6 +283,82 @@ searches:
         #   "carpet" / "headlining" / "dashboard" — same risk as door card
         #   "seat runner" — sometimes appears in legit listings; punt to miner
 
+  alfa_giulia_gt_junior:
+    label: "Alfa Romeo Giulia GT Junior"
+    # The 105-chassis coupe (1965-1976). "alfa romeo giulia" is the
+    # broad query FB / eBay / C&C keyword-match on; required_keywords
+    # narrows titles to the Junior / GTJ variants specifically.
+    query: "alfa romeo giulia"
+    required_keywords:
+      - junior
+      - "gt junior"
+      - gtj
+    sites:
+      - autoscout24
+      - carandclassic
+      - ebay
+      - facebook
+    site_overrides:
+      # AS24 lists the 105 coupe as `alfa-romeo/gt` (not `giulia`, which
+      # is the modern sedan). Force the model slug and pin the Junior
+      # production years so the URL filter excludes the 2003-2010 GT
+      # hatchback that shares the slug.
+      autoscout24:
+        model: gt
+        year_from: 1965
+        year_to: 1976
+      # Classic Alfa coupes are Italy-heavy; widen beyond the GB/DE/NL
+      # default. Uses the per-search marketplaces override wired in
+      # scrapers/ebay.py.
+      ebay:
+        marketplaces:
+          - EBAY_GB
+          - EBAY_DE
+          - EBAY_NL
+          - EBAY_IT
+          - EBAY_ES
+          - EBAY_FR
+          - EBAY_AT
+    filters:
+      min_price_usd: 5000    # Below is parts / scale models
+      max_price_usd: 35000   # Matches the Escort cap
+      year_from: 1965        # 105 GT production start
+      year_to: 1976          # 105 GT production end
+      # Same 32-country EU allowlist as the seats hunt (Europe-only).
+      allowed_country_codes:
+        - AT
+        - BE
+        - BG
+        - CY
+        - CZ
+        - DE
+        - DK
+        - EE
+        - ES
+        - FI
+        - FR
+        - GR
+        - HR
+        - HU
+        - IE
+        - IT
+        - LT
+        - LU
+        - LV
+        - MT
+        - NL
+        - PL
+        - PT
+        - RO
+        - SE
+        - SI
+        - SK
+        - IS
+        - LI
+        - 'NO'
+        - CH
+        - GB
+
 # ─── Review UI (--serve-web) ──────────────────────────────────────────────────
 # Reasons that show up in the reject dropdown on the React review app.
 # Reordering, adding, or removing entries here is reflected live without a

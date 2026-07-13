@@ -50,7 +50,14 @@ class EbayScraper(BaseScraper):
         return self._token
 
     def fetch_listings(self) -> List[Listing]:
-        marketplaces = self.config.get("marketplaces", ["EBAY_GB", "EBAY_DE", "EBAY_NL"])
+        # Per-search marketplace override wins (e.g. the Alfa GT hunt wants
+        # EBAY_IT + adjacent EU markets); falls back to the global site
+        # config, which itself defaults to GB/DE/NL. Same pattern as the
+        # category_ids override below.
+        marketplaces = (
+            self.extra_params.get("marketplaces")
+            or self.config.get("marketplaces", ["EBAY_GB", "EBAY_DE", "EBAY_NL"])
+        )
         # Per-search per-marketplace category overrides come in via extra_params
         # from BaseScraper. Shape: {"EBAY_GB": "33701", "EBAY_DE": "..."}.
         # When set, marketplaces without a mapping are SKIPPED — running an

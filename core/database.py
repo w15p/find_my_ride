@@ -127,6 +127,7 @@ _SEATS_SEARCH_MIGRATION_ID = "002_seats_search"
 _ORPHAN_BACKFILL_MIGRATION_ID = "003_orphan_backfill"
 _PATTERN_MINER_MIGRATION_ID = "004_pattern_miner"
 _WATCHED_URLS_MIGRATION_ID = "005_watched_urls"
+_ALFA_GT_JUNIOR_SEARCH_MIGRATION_ID = "006_alfa_gt_junior_search"
 _DEFAULT_SEARCH_SLUG = "escort_mk1_lhd"
 _DEFAULT_SEARCH_LABEL = "Ford Escort Mk1 LHD"
 _DEFAULT_TENANT_ID = "default"
@@ -136,6 +137,10 @@ _DEFAULT_TENANT_ID = "default"
 # config (query, required_keywords, sites, filters) lives in config/config.yaml.
 _SEATS_SEARCH_SLUG = "rs2000_mexico_seats"
 _SEATS_SEARCH_LABEL = "RS2000 / Mexico Seats"
+
+# Third saved search — Alfa Romeo Giulia GT Junior (105 chassis, 1965-1976).
+_ALFA_GT_JUNIOR_SEARCH_SLUG = "alfa_giulia_gt_junior"
+_ALFA_GT_JUNIOR_SEARCH_LABEL = "Alfa Romeo Giulia GT Junior"
 
 # Columns on `listings` that are NOT user-state. Used by listings_select_sql()
 # below to build a deduplicated SELECT list when joining tenant_listing_state.
@@ -351,6 +356,36 @@ class ListingDB:
         self._migrate_orphan_backfill()
         self._migrate_pattern_miner()
         self._migrate_watched_urls()
+        self._migrate_alfa_gt_junior_search()
+
+    def _migrate_alfa_gt_junior_search(self) -> None:
+        """Seed the `searches` row for the Alfa Romeo Giulia GT Junior hunt.
+
+        Idempotent + gated on schema_migrations. Same pattern as the seats
+        seed. Per-search config (query, required_keywords, sites, filters)
+        lives in config/config.yaml under `searches.alfa_giulia_gt_junior`.
+        """
+        already = self.conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE id = ?",
+            (_ALFA_GT_JUNIOR_SEARCH_MIGRATION_ID,),
+        ).fetchone()
+        if already:
+            return
+        now = datetime.utcnow().isoformat()
+        self.conn.execute("BEGIN")
+        try:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO searches (slug, label, created_at) VALUES (?, ?, ?)",
+                (_ALFA_GT_JUNIOR_SEARCH_SLUG, _ALFA_GT_JUNIOR_SEARCH_LABEL, now),
+            )
+            self.conn.execute(
+                "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+                (_ALFA_GT_JUNIOR_SEARCH_MIGRATION_ID, now),
+            )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
 
     def _migrate_seats_search(self) -> None:
         """Seed the `searches` row for the RS2000 / Mexico seats hunt.
