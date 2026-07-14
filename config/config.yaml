@@ -287,10 +287,14 @@ searches:
 
   alfa_giulia_gt_junior:
     label: "Alfa Romeo Giulia GT Junior"
-    # The 105-chassis coupe (1965-1976). "alfa romeo giulia" is the
-    # broad query FB / eBay / C&C keyword-match on; required_keywords
-    # narrows titles to the Junior / GTJ variants specifically.
-    query: "alfa romeo giulia"
+    # The 105-chassis coupe (1965-1974). Query is "alfa romeo gt" - not
+    # "giulia" - because on eBay "alfa romeo giulia" returns almost all
+    # modern (2015+) Giulia sedans, since that's the current dominant meaning
+    # of the name. Classic 105 coupe titles overwhelmingly use "GT" (base,
+    # Junior, Veloce, GTV, GTA) so "alfa romeo gt" hits them directly.
+    # AS24 ignores this query anyway (it uses site_overrides.autoscout24.model="gt");
+    # C&C is fine with the broader term; FB anchor search benefits too.
+    query: "alfa romeo gt"
     # Broadened past just "Junior" to cover the whole 105 coupe family: base
     # GT, GTV, GTA, GTAm ("gtam" contains "gta"), Sprint GT, Bertone-badged
     # variants. Year window + AS24 model=gt slug + $35K USD cap keeps it
