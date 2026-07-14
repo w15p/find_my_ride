@@ -7,9 +7,37 @@ errors and return None — translation is a nice-to-have, never a blocker.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional, Tuple
 
 log = logging.getLogger(__name__)
+
+
+def _is_shouty(text: str) -> bool:
+    """True if >70% of alphabetic chars in `text` are uppercase.
+
+    Needs at least 30 alpha chars to avoid tripping on brief acronym-heavy
+    strings ("BMW M3 GTS" is fine, not shouty).
+    """
+    alphas = [c for c in text if c.isalpha()]
+    if len(alphas) < 30:
+        return False
+    return sum(1 for c in alphas if c.isupper()) / len(alphas) > 0.7
+
+
+def _tone_down(text: str) -> str:
+    """Convert shouty translated prose to sentence case. Simple: downcase
+    everything, then capitalize the first letter of each sentence. Model
+    badges (GT, GTV, RS, etc.) lose their capitalization in the process,
+    but they appear correctly-cased in the listing title above the
+    description, so context isn't really lost.
+    """
+    text = text.lower()
+    return re.sub(
+        r"(^|[.!?]\s+|\n\s*)([a-z])",
+        lambda m: m.group(1) + m.group(2).upper(),
+        text,
+    )
 
 
 # ISO 3166 country -> ISO 639-1 language. Only countries with a single
@@ -68,10 +96,17 @@ def translate_to_english(text: str, source: Optional[str] = None) -> Optional[st
         pass
     try:
         from deep_translator import GoogleTranslator  # type: ignore
-        return GoogleTranslator(source=source or "auto", target="en").translate(text[:4500])
+        result = GoogleTranslator(source=source or "auto", target="en").translate(text[:4500])
     except Exception as exc:
         log.debug("translation failed: %s", exc)
         return None
+    # Sellers often type in all-caps ("EX-KEEPER CAR, LOW MILES..."); Google
+    # Translate faithfully preserves that in the English output, which is
+    # painful to read. Downcase to sentence case when the translation is
+    # clearly shouty. Untouched otherwise.
+    if result and _is_shouty(result):
+        result = _tone_down(result)
+    return result
 
 
 def detect_and_translate(
