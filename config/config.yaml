@@ -10,7 +10,9 @@ filters:
     - "escort mkI"
     - "escort mk 1"
   year_from: 1968
-  year_to: 1975
+  # 1975 and later trigger US California emissions rules, which makes resale
+  # / import there fiddly. Cap at 1974 across every search where it applies.
+  year_to: 1974
   steering: lhd
   # Hard price window in USD. Anything outside is rejected at save time and
   # never reaches the DB or the email.
@@ -160,7 +162,7 @@ searches:
     site_overrides:
       autoscout24:
         year_from: 1968
-        year_to: 1975
+        year_to: 1974   # 1975+ = California emissions bracket
     # filters: — read from top-level `filters:` above (Commit 1 back-compat)
 
   rs2000_mexico_seats:
@@ -314,7 +316,7 @@ searches:
       autoscout24:
         model: gt
         year_from: 1965
-        year_to: 1976
+        year_to: 1974   # 1975+ = California emissions bracket
       # Classic Alfa coupes are Italy-heavy; widen beyond the GB/DE/NL
       # default. Uses the per-search marketplaces override wired in
       # scrapers/ebay.py.
@@ -331,7 +333,15 @@ searches:
       min_price_usd: 5000    # Below is parts / scale models
       max_price_usd: 35000   # Matches the Escort cap
       year_from: 1965        # 105 GT production start
-      year_to: 1976          # 105 GT production end
+      year_to: 1974          # 1975+ = California emissions bracket (was 1976)
+      # Sprint Speciale (SS) - the Bertone one-off body - and Scalino
+      # (step-front early Junior) are not what the user is hunting. Both are
+      # unambiguous title tokens; "ss" is a single token so word-boundary
+      # matching means it won't false-hit "class", "boss", etc.
+      reject_title_keywords:
+        - "sprint speciale"
+        - ss
+        - scalino
       # Same 32-country EU allowlist as the seats hunt (Europe-only).
       allowed_country_codes:
         - AT
