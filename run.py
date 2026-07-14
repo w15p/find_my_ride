@@ -474,12 +474,17 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
                 l.canonical_url = _find_canonical(l, db, cfg)
                 if l.canonical_url:
                     log.info("  Duplicate: %s → canonical %s", l.url, l.canonical_url)
-                if l.description:
-                    l.description_language, l.description_translated = detect_and_translate(l.description)
+                # Resolve country_code from location FIRST so it can prime
+                # the language detector below (way more reliable than
+                # langdetect on car-listing text).
                 if l.location and not l.country_code:
                     iso = lookup_country(l.location)
                     if iso:
                         l.country_code = iso
+                if l.description:
+                    l.description_language, l.description_translated = detect_and_translate(
+                        l.description, country_code=l.country_code,
+                    )
 
             if not args.check_only:
                 db.save(new, search_id=search_id)
