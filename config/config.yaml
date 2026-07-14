@@ -289,10 +289,18 @@ searches:
     # broad query FB / eBay / C&C keyword-match on; required_keywords
     # narrows titles to the Junior / GTJ variants specifically.
     query: "alfa romeo giulia"
+    # Broadened past just "Junior" to cover the whole 105 coupe family: base
+    # GT, GTV, GTA, GTAm ("gtam" contains "gta"), Sprint GT, Bertone-badged
+    # variants. Year window + AS24 model=gt slug + $35K USD cap keeps it
+    # 105-era and affordable; if a hail-mary GTA/GTAm slips in under the
+    # cap on eBay/FB, that's the whole point.
     required_keywords:
+      - gt
+      - gtv
+      - gta
       - junior
-      - "gt junior"
-      - gtj
+      - sprint
+      - bertone
     sites:
       - autoscout24
       - carandclassic

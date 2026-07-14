@@ -210,8 +210,56 @@ class AutoScout24Scraper(BaseScraper):
 
             browser.close()
 
+        # Enrich each result with the seller's free-text description from the
+        # detail page. AS24 embeds it in a Next.js hydration blob so a plain
+        # requests fetch is enough - no need for a second Playwright pass.
+        # The translation pipeline in run.py (detect_and_translate) picks it
+        # up from listing.description afterward.
+        for listing in results:
+            desc = self._fetch_description(listing.url)
+            if desc:
+                listing.description = desc[:1000]
+            # Polite: AS24 rate-limits on rapid detail hits from a single IP.
+            time.sleep(random.uniform(0.4, 1.0))
+
         self.log.info("AutoScout24 total listings: %d", len(results))
         return results
+
+    def _fetch_description(self, url: str) -> Optional[str]:
+        """Return the seller's free-text description from an AS24 detail page.
+
+        The description lives in the Next.js __NEXT_DATA__ script at
+        `props.pageProps.listingDetails.description` and comes wrapped in
+        light HTML (<strong>, <br />). We strip the tags to plain text so the
+        translator gets clean input.
+        """
+        try:
+            resp = self.http.get(url, headers={"User-Agent": random.choice(USER_AGENTS)}, timeout=20)
+            if resp.status_code != 200:
+                self.log.debug("AS24 detail %d for %s", resp.status_code, url)
+                return None
+            import json
+            m = re.search(r'<script id="__NEXT_DATA__" type="application/json">([^<]+)</script>', resp.text)
+            if not m:
+                return None
+            data = json.loads(m.group(1))
+            desc = (
+                data.get("props", {})
+                .get("pageProps", {})
+                .get("listingDetails", {})
+                .get("description")
+            )
+            if not desc:
+                return None
+            # Strip HTML tags and collapse whitespace.
+            text = re.sub(r"<br\s*/?>", "\n", desc)
+            text = re.sub(r"<[^>]+>", "", text)
+            text = re.sub(r"[ \t]+", " ", text)
+            text = re.sub(r"\n{3,}", "\n\n", text).strip()
+            return text or None
+        except Exception as exc:
+            self.log.debug("AS24 detail fetch failed for %s: %s", url, exc)
+            return None
 
     def _parse_card(self, card) -> Optional[Listing]:
         try:
