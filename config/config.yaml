@@ -21,6 +21,13 @@ filters:
   #   - Above the ceiling: out of personal budget. Don't waste DB rows on it.
   min_price_usd: 2000
   max_price_usd: 35000
+  # FB Marketplace listings rarely include the car's year in card metadata,
+  # so listings.year=None on many FB items. For the cars hunt, require at
+  # least one Mk-version signal in the title when year is unknown - keeps
+  # scale models, unmarked Mk2+, and generic "Escort" parts out of the DB.
+  # Alfa/other searches don't set this and get permissive unknown-year
+  # handling (reviewed manually).
+  no_year_signals: [mk1, "mk 1", mki, "mk i", "mark 1", "mark i"]
   # Perceptual-hash Hamming distance threshold for cross-source dedupe.
   phash_max_distance: 8
   # Title tokens that conclusively identify a non-Mk1-car listing (parts, wrong variants,

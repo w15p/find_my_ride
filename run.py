@@ -175,10 +175,14 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
     year_from = filt.get("year_from")
     year_to = filt.get("year_to")
 
-    # Year — if a year window is configured, enforce it. Listings with no
-    # scraped year must carry a Mk-version signal in the title (a cars-hunt
-    # heuristic to filter scale models and parts); a search with no year
-    # window skips this check entirely (seats don't have meaningful years).
+    # Year - if a year window is configured, enforce it. Listings with no
+    # scraped year (common on FB Marketplace, which doesn't include year in
+    # card metadata) need special handling: some searches want a title
+    # signal to survive (the cars hunt uses "mk1" etc. to filter scale
+    # models and parts), others want to be permissive (Alfa can't require
+    # a specific signal because the model names vary). Per-search config
+    # via `no_year_signals`; absent, unknown-year listings pass through the
+    # year check and get reviewed manually.
     if year_from is not None or year_to is not None:
         if listing.year is not None:
             if year_from is not None and listing.year < year_from:
@@ -188,10 +192,12 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
                 log.debug("Reject (year > %d): %s", year_to, listing.url)
                 return False
         else:
-            title_lower = (listing.title or "").lower()
-            if not any(kw in title_lower for kw in ("mk1", "mk 1", "mki", "mk i", "mark 1", "mark i")):
-                log.debug("Reject (no year + no mk1 signal): %s", listing.url)
-                return False
+            no_year_signals = filt.get("no_year_signals") or []
+            if no_year_signals:
+                title_lower = (listing.title or "").lower()
+                if not any(sig.lower() in title_lower for sig in no_year_signals):
+                    log.debug("Reject (no year + no signal): %s", listing.url)
+                    return False
 
     # Reject keywords
     reject_kws = filt.get("reject_title_keywords") or []
