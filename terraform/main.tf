@@ -262,13 +262,12 @@ resource "aws_iam_instance_profile" "haystack" {
 
 resource "aws_instance" "haystack" {
   ami           = data.aws_ssm_parameter.al2023_ami.value
-  instance_type = "t3.micro"
+  instance_type = "t3.small"
 
-  # t3 uses T3 Unlimited credit mode by default; the scraper + Playwright
-  # workload is bursty-CPU, not sustained. If Playwright OOMs (typically at
-  # ~600 MB per Chromium tab), upgrade to t3.small (2 GB RAM, still ~$15/mo).
-  # TODO: monitor /haystack/app CloudWatch logs for OOM kills; if seen, run:
-  #   aws ec2 modify-instance-attribute --instance-id <id> --instance-type t3.small
+  # Upsized micro -> small on 2026-06-22 after repeated Playwright-driven
+  # systemd-logind hangs OOM'd the 1 GB t3.micro. t3.small = 2 GB RAM. The
+  # live instance was changed via `aws ec2 modify-instance-attribute`; this
+  # line records that so terraform doesn't try to revert it to t3.micro.
 
   subnet_id                   = aws_subnet.public.id
   vpc_security_group_ids      = [aws_security_group.haystack.id]

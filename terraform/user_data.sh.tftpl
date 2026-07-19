@@ -331,6 +331,13 @@ StandardError=append:/var/log/haystack/scrape.log
 # Facebook scraper can legitimately take 3-4h for the 23-anchor sweep.
 # The in-code watchdog (core/watchdog.py) handles per-site budgets.
 TimeoutStartSec=18000
+# Resource caps: a Playwright/Chromium overrun must not starve sshd or
+# systemd-logind (the recurring banner-exchange hang we kept rebooting from
+# on the old t3.micro). OOMScoreAdjust makes this unit the OOM killer's
+# first target instead of the login stack.
+MemoryMax=1500M
+TasksMax=200
+OOMScoreAdjust=500
 UNIT
 
 cat > /etc/systemd/system/haystack-scrape.timer <<UNIT
@@ -348,7 +355,10 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 
-# haystack-digest: email digest + pre-validate (chains --validate internally)
+# haystack-digest: email digest only. Validation is a SEPARATE unit
+# (haystack-validate) so a slow FB validate through the home proxy can't
+# block or kill the email send. --skip-validate keeps this a fast DB-query
+# + SMTP send.
 cat > /etc/systemd/system/haystack-digest.service <<UNIT
 [Unit]
 Description=Haystack daily email digest
@@ -360,10 +370,10 @@ Group=$APP_USER
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$APP_DIR/.env
 Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright"
-ExecStart=$VENV/bin/python run.py --send-digest
+ExecStart=$VENV/bin/python run.py --send-digest --skip-validate
 StandardOutput=append:/var/log/haystack/digest.log
 StandardError=append:/var/log/haystack/digest.log
-TimeoutStartSec=7200
+TimeoutStartSec=300
 UNIT
 
 cat > /etc/systemd/system/haystack-digest.timer <<UNIT
@@ -375,6 +385,44 @@ Description=Haystack daily digest at 07:40 UTC (~00:40 Pacific)
 # RandomizedDelaySec adds up to ±20min jitter.
 OnCalendar=*-*-* 07:40:00
 RandomizedDelaySec=1200
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+# haystack-validate: re-check active listings, mark sold/expired. Decoupled
+# from the digest 2026-06-01 - the FB validate pass goes through the home
+# reverse-SOCKS proxy and was tripping the in-digest watchdog, killing the
+# email send. Runs at 05:00 UTC, ~2.5h before the 07:40 digest.
+cat > /etc/systemd/system/haystack-validate.service <<UNIT
+[Unit]
+Description=Haystack active-listing validation (mark sold/expired)
+
+[Service]
+Type=oneshot
+User=$APP_USER
+Group=$APP_USER
+WorkingDirectory=$APP_DIR
+EnvironmentFile=$APP_DIR/.env
+Environment="PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright"
+ExecStart=$VENV/bin/python run.py --validate
+StandardOutput=append:/var/log/haystack/validate.log
+StandardError=append:/var/log/haystack/validate.log
+TimeoutStartSec=7200
+# Same OOM-prefer + memory ceiling as scrape/refresh-fb-images.
+MemoryMax=1500M
+TasksMax=200
+OOMScoreAdjust=500
+UNIT
+
+cat > /etc/systemd/system/haystack-validate.timer <<UNIT
+[Unit]
+Description=Run haystack-validate nightly at 05:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 05:00:00
+RandomizedDelaySec=600
 Persistent=true
 
 [Install]
@@ -429,6 +477,10 @@ ExecStart=$VENV/bin/python run.py --refresh-fb-images
 StandardOutput=append:/var/log/haystack/refresh-fb-images.log
 StandardError=append:/var/log/haystack/refresh-fb-images.log
 TimeoutStartSec=3600
+# Same OOM-prefer + memory ceiling as scrape/validate.
+MemoryMax=1500M
+TasksMax=200
+OOMScoreAdjust=500
 UNIT
 
 cat > /etc/systemd/system/haystack-refresh-fb-images.timer <<UNIT
@@ -539,6 +591,7 @@ systemctl enable --now haystack-web
 
 systemctl enable --now haystack-scrape.timer
 systemctl enable --now haystack-digest.timer
+systemctl enable --now haystack-validate.timer
 systemctl enable --now haystack-mine.timer
 systemctl enable --now haystack-refresh-fb-images.timer
 
