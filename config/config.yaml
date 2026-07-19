@@ -345,14 +345,14 @@ searches:
       max_price_usd: 35000   # Matches the Escort cap
       year_from: 1965        # 105 GT production start
       year_to: 1974          # 1975+ = California emissions bracket (was 1976)
-      # Sprint Speciale (SS) - the Bertone one-off body - and Scalino
-      # (step-front early Junior) are not what the user is hunting. Both are
-      # unambiguous title tokens; "ss" is a single token so word-boundary
-      # matching means it won't false-hit "class", "boss", etc.
+      # Sprint Speciale (SS) - the Bertone one-off body - is not what the
+      # user is hunting. "ss" is a single-token word-boundary match so it
+      # won't false-hit "class", "boss", etc. Scalino (step-front early
+      # Junior) was in this list initially but removed - once the classic
+      # Alfa market realities became clear, seeing Scalinos is useful.
       reject_title_keywords:
         - "sprint speciale"
         - ss
-        - scalino
       # Same 32-country EU allowlist as the seats hunt (Europe-only).
       allowed_country_codes:
         - AT
