@@ -261,7 +261,16 @@ resource "aws_iam_instance_profile" "haystack" {
 # ── EC2 instance ──────────────────────────────────────────────────────────────
 
 resource "aws_instance" "haystack" {
-  ami           = data.aws_ssm_parameter.al2023_ami.value
+  # Pinned to the AMI the instance actually launched from. Previously this
+  # was data.aws_ssm_parameter.al2023_ami.value ("latest" AL2023), but AWS
+  # rolls that pointer forward regularly, and any change to it forces a full
+  # instance REPLACEMENT (rebuild root volume, re-run bootstrap) - which the
+  # user_data_base64 ignore_changes can't prevent, because a new AMI triggers
+  # replace rather than in-place update. This is a pet instance, not cattle:
+  # pin explicitly and bump this literal only when a fresh OS is wanted (then
+  # `terraform apply` will intentionally replace). Launched 2026-05-26 on
+  # al2023-ami-kernel-default-x86_64.
+  ami           = "ami-055fa94f88d629cc9"
   instance_type = "t3.small"
 
   # Upsized micro -> small on 2026-06-22 after repeated Playwright-driven
