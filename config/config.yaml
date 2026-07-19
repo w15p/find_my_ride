@@ -494,9 +494,13 @@ sites:
       - {name: "Dublin",     lat: 53.3498, lng:  -6.2603}
       - {name: "Edinburgh",  lat: 55.9533, lng:  -3.1883}
       - {name: "London",     lat: 51.5074, lng:  -0.1278}
-      # Iberia — high-density market for LHD Escorts
+      # Iberia — high-density market for LHD Escorts. Porto removed: FB
+      # doesn't recognise a "porto"/"oporto"/"wien"-style slug for it (falls
+      # back to the egress-IP local marketplace), and Lisbon's ~805km radius
+      # already reaches all of Portugal (verified: Coimbra/Santarem results).
+      # `slug:` overrides the default name.lower() when FB needs a different
+      # path segment; none of the current anchors need one.
       - {name: "Lisbon",     lat: 38.7169, lng:  -9.1395}
-      - {name: "Porto",      lat: 41.1579, lng:  -8.6291}
       - {name: "Madrid",     lat: 40.4168, lng:  -3.7038}
       # France / Benelux
       - {name: "Paris",      lat: 48.8566, lng:   2.3522}
