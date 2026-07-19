@@ -405,9 +405,6 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
         for row in db.conn.execute("SELECT id, slug FROM searches")
     }
 
-    from core.geocode import lookup_country
-    from core.translate import detect_and_translate
-
     all_new: list[Listing] = []
     for slug, search_cfg in searches_cfg.items():
         search_id = search_ids.get(slug)
@@ -470,27 +467,8 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
             new = db.filter_new(kept, search_id=search_id)
             log.info("  %d new for search_id=%d", len(new), search_id)
 
-            # Compute phash + fingerprint, then look for cross-source duplicates.
-            # Also detect language and translate non-English descriptions so the
-            # review-app card and digest can render English by default.
-            # And fill country_code via Nominatim when the scraper missed it.
             for l in new:
-                l.image_phash = _compute_phash(l.image_url)
-                l.fingerprint = _compute_fingerprint(l)
-                l.canonical_url = _find_canonical(l, db, cfg)
-                if l.canonical_url:
-                    log.info("  Duplicate: %s → canonical %s", l.url, l.canonical_url)
-                # Resolve country_code from location FIRST so it can prime
-                # the language detector below (way more reliable than
-                # langdetect on car-listing text).
-                if l.location and not l.country_code:
-                    iso = lookup_country(l.location)
-                    if iso:
-                        l.country_code = iso
-                if l.description:
-                    l.description_language, l.description_translated = detect_and_translate(
-                        l.description, country_code=l.country_code,
-                    )
+                _enrich_listing(l, db, cfg, log)
 
             if not args.check_only:
                 db.save(new, search_id=search_id)
@@ -505,6 +483,32 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
         all_new.extend(watched_new)
 
     return all_new
+
+
+def _enrich_listing(l: Listing, db: ListingDB, cfg: dict, log: logging.Logger) -> None:
+    """Compute phash + fingerprint + canonical, resolve country_code, and
+    translate the description. Shared by the main scrape loop and the
+    watched-URL path so both produce fully-populated rows (previously the
+    watched path skipped all of this, leaving pasted FB URLs untranslated
+    and without dedup fingerprints).
+    """
+    from core.translate import detect_and_translate
+    from core.geocode import lookup_country
+    l.image_phash = _compute_phash(l.image_url)
+    l.fingerprint = _compute_fingerprint(l)
+    l.canonical_url = _find_canonical(l, db, cfg)
+    if l.canonical_url:
+        log.info("  Duplicate: %s -> canonical %s", l.url, l.canonical_url)
+    # Resolve country_code from location FIRST so it can prime the language
+    # detector (way more reliable than langdetect on car-listing text).
+    if l.location and not l.country_code:
+        iso = lookup_country(l.location)
+        if iso:
+            l.country_code = iso
+    if l.description:
+        l.description_language, l.description_translated = detect_and_translate(
+            l.description, country_code=l.country_code,
+        )
 
 
 def _process_watched_urls(
@@ -563,6 +567,9 @@ def _process_watched_urls(
         if not existing:
             log.debug("  Watched URL already tracked: %s", url)
             continue
+        # Enrich (translate, country, phash, fingerprint) same as the main
+        # scrape path - watched URLs used to skip this and land untranslated.
+        _enrich_listing(listing, db, cfg, log)
         if not args.check_only:
             db.save([listing], search_id=search_id)
         new_listings.append(listing)
