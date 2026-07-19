@@ -471,7 +471,11 @@ sites:
   facebook:
     enabled: true
     profile_dir: ".fb_profile"         # run `python run.py --fb-login` once to authenticate
-    search_radius_km: 500
+    # FB Marketplace's implicit default without a radius param is ~805 km
+    # (wider than we were pinning at 500). Setting this to null omits the
+    # param and lets FB use its default, which gives better per-anchor
+    # coverage.
+    search_radius_km: null
     # 23-anchor coverage map. FB's marketplace search is location-radius-bound,
     # so a single search misses most of Europe. The previous 9-anchor set was
     # NW-Europe-heavy (London/Amsterdam/Brussels/Paris cluster) and left

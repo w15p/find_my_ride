@@ -147,17 +147,43 @@ class FacebookScraper(BaseScraper):
     # ------------------------------------------------------------------ search
 
     def _search_location(self, page, loc: dict, radius_km: int) -> set[str]:
+        """Search FB Marketplace near one anchor and return listing URLs.
+
+        FB rewrites `/marketplace/search/?latitude=X&longitude=Y` to
+        `/marketplace/{city-derived-from-egress-IP}/search/` regardless of
+        what lat/lng we pass. The URL query params for coordinates are
+        purely decorative; the real location filter is the URL PATH. To
+        force a specific anchor we set the path directly with the city
+        slug (loc["slug"], default = loc["name"].lower()) and drop the
+        lat/lng entirely. When FB doesn't recognise a slug it falls back
+        to `/marketplace/category/` (= our egress IP's local Marketplace),
+        which we detect and warn about so the config can be fixed.
+
+        radius_km: when None, omit the parameter so FB uses its default
+        (currently 805km, which is wider than our old hardcoded 500km).
+        """
         from urllib.parse import quote_plus
         found: set[str] = set()
-        url = (
-            f"{BASE_URL}/marketplace/search/"
-            f"?query={quote_plus(self.query)}"
-            f"&latitude={loc['lat']}&longitude={loc['lng']}"
-            f"&radius={radius_km}&exact=false"
-        )
+        slug = loc.get("slug") or loc["name"].lower()
+        url = f"{BASE_URL}/marketplace/{slug}/search/?query={quote_plus(self.query)}&exact=false"
+        if radius_km:
+            url += f"&radius={radius_km}"
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             time.sleep(random.uniform(3.0, 5.0))
+
+            # Detect the "unknown slug -> /marketplace/category/" fallback -
+            # results come from our egress IP's marketplace, not the anchor.
+            final = page.url
+            if "/marketplace/category/" in final:
+                self.log.warning(
+                    "FB slug %r not recognised for %s; results fell back to "
+                    "local marketplace. Set an explicit `slug:` in config for "
+                    "this anchor. final_url=%s",
+                    slug, loc["name"], final,
+                )
+                return found
+
             for _ in range(3):
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 time.sleep(random.uniform(1.5, 2.5))

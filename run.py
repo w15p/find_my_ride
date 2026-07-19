@@ -186,23 +186,23 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
     if year_from is not None or year_to is not None:
         if listing.year is not None:
             if year_from is not None and listing.year < year_from:
-                log.warning("REJECT_DIAG year<%d y=%s cc=%s title=%r", year_from, listing.year, listing.country_code, (listing.title or "")[:60])
+                log.debug("Reject (year < %d): %s", year_from, listing.url)
                 return False
             if year_to is not None and listing.year > year_to:
-                log.warning("REJECT_DIAG year>%d y=%s cc=%s title=%r", year_to, listing.year, listing.country_code, (listing.title or "")[:60])
+                log.debug("Reject (year > %d): %s", year_to, listing.url)
                 return False
         else:
             no_year_signals = filt.get("no_year_signals") or []
             if no_year_signals:
                 title_lower = (listing.title or "").lower()
                 if not any(sig.lower() in title_lower for sig in no_year_signals):
-                    log.warning("REJECT_DIAG no-year+no-signal cc=%s title=%r", listing.country_code, (listing.title or "")[:60])
+                    log.debug("Reject (no year + no signal): %s", listing.url)
                     return False
 
     # Reject keywords
     reject_kws = filt.get("reject_title_keywords") or []
     if reject_kws and _matches_reject_keyword(listing.title or "", reject_kws):
-        log.warning("REJECT_DIAG title-keyword title=%r", (listing.title or "")[:60])
+        log.debug("Reject (title keyword): %s — %s", listing.url, listing.title)
         return False
 
     # USD price window
@@ -215,13 +215,13 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
                 # Exchange-rate API is down — keep rather than blank the pipeline.
                 log.warning("Keeping %s despite missing rates", listing.url)
                 return True
-            log.warning("REJECT_DIAG no-convertible-price pv=%s pc=%s cc=%s title=%r", listing.price_value, listing.price_currency, listing.country_code, (listing.title or "")[:60])
+            log.debug("Reject (no convertible price): %s", listing.url)
             return False
         if min_usd is not None and usd < min_usd:
-            log.warning("REJECT_DIAG under-min usd=%.0f min=%d cc=%s title=%r", usd, min_usd, listing.country_code, (listing.title or "")[:60])
+            log.debug("Reject (under $%d USD: $%.0f): %s", min_usd, usd, listing.url)
             return False
         if max_usd is not None and usd > max_usd:
-            log.warning("REJECT_DIAG over-max usd=%.0f max=%d cc=%s title=%r", usd, max_usd, listing.country_code, (listing.title or "")[:60])
+            log.debug("Reject (over $%d USD: $%.0f): %s", max_usd, usd, listing.url)
             return False
 
     # Country allowlist: drop listings whose seller country isn't in the
@@ -237,7 +237,7 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
         allowed_upper = {c.upper() for c in allowed}
         cc = (listing.country_code or "").upper()
         if cc and cc not in allowed_upper:
-            log.warning("REJECT_DIAG cc-not-allowed cc=%s title=%r", cc, (listing.title or "")[:60])
+            log.debug("Reject (country %s not in allowlist): %s", cc, listing.url)
             return False
 
     return True
