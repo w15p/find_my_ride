@@ -198,6 +198,21 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
             </button>
           )}
           {usd && <span className="text-slate-500 font-normal text-xs">({usd})</span>}
+          {l.price_direction && (
+            <span
+              className={`font-bold text-sm ${
+                l.price_direction === "down" ? "text-green-600" : "text-red-600"
+              }`}
+              title={
+                l.prev_display_price
+                  ? `Price ${l.price_direction === "down" ? "dropped" : "rose"} from ${l.prev_display_price}` +
+                    (l.price_changed_at ? ` (${l.price_changed_at.slice(0, 10)})` : "")
+                  : "Price changed since last check"
+              }
+            >
+              {l.price_direction === "down" ? "↓" : "↑"}
+            </span>
+          )}
           {effectiveCurrency && (
             <>
               <select

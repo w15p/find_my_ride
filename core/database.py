@@ -150,6 +150,8 @@ _LISTING_COLS_NON_USER = (
     "description", "image_phash", "fingerprint", "canonical_url",
     "sold_signals_count", "scraped_at", "status", "sold_at",
     "description_language", "description_translated",
+    # Price-refresh tracking (listing-level facts, shared across tenants).
+    "prev_price_value", "price_changed_at", "price_checked_at",
 )
 # Per-tenant overrides — kept on both `listings` (legacy, write-through) and
 # `tenant_listing_state` (forward target). Reads COALESCE tls over legacy.
@@ -157,7 +159,7 @@ _USER_STATE_COLS = (
     "user_rejected", "user_reject_reason", "user_rejected_at",
     "user_note", "user_pinned", "user_pinned_at",
     "user_steering", "user_location", "user_year", "user_price_currency",
-    "user_price_value",
+    "user_price_value", "user_price_at",
 )
 
 
@@ -775,6 +777,67 @@ class ListingDB:
         self.conn.commit()
         self.conn.commit()
 
+    def update_price(
+        self,
+        url: str,
+        new_price_value: Optional[int],
+        new_price_raw: Optional[str],
+        new_price_currency: Optional[str],
+    ) -> str:
+        """Record a re-polled price for a listing, tracking changes.
+
+        Prices are frozen at first scrape (the scrape cycle drops known
+        listings), so a periodic re-poll re-syncs them. Bookkeeping:
+          - price_checked_at is always stamped (we looked, even if unchanged).
+          - When the new value differs from the stored one, the old value
+            shifts into prev_price_value and price_changed_at is stamped -
+            this drives the up/down arrow in the UI (compares price_value to
+            prev_price_value). The change marker persists until the NEXT
+            change (we don't clear prev on an unchanged poll).
+          - First-ever poll of a listing with no prior price just sets it,
+            with no prev and no change stamp.
+
+        Returns "changed" | "unchanged" | "first" for the caller's logging.
+        """
+        now = datetime.utcnow().isoformat()
+        row = self.conn.execute(
+            "SELECT price_value FROM listings WHERE url=?", (url,)
+        ).fetchone()
+        current = row["price_value"] if row else None
+
+        if new_price_value is None:
+            # Couldn't parse a price this poll; just record that we looked.
+            self.conn.execute(
+                "UPDATE listings SET price_checked_at=? WHERE url=?", (now, url)
+            )
+            self.conn.commit()
+            return "unchanged"
+
+        if current is None:
+            self.conn.execute(
+                "UPDATE listings SET price_value=?, price=?, price_currency=?, "
+                "price_checked_at=? WHERE url=?",
+                (new_price_value, new_price_raw, new_price_currency, now, url),
+            )
+            self.conn.commit()
+            return "first"
+
+        if new_price_value == current:
+            self.conn.execute(
+                "UPDATE listings SET price_checked_at=? WHERE url=?", (now, url)
+            )
+            self.conn.commit()
+            return "unchanged"
+
+        # Changed: shift the old value into prev, stamp the change.
+        self.conn.execute(
+            "UPDATE listings SET prev_price_value=?, price_value=?, price=?, "
+            "price_currency=?, price_changed_at=?, price_checked_at=? WHERE url=?",
+            (current, new_price_value, new_price_raw, new_price_currency, now, now, url),
+        )
+        self.conn.commit()
+        return "changed"
+
     def update_dedupe_fields(self, url: str, *, image_phash: Optional[str], fingerprint: Optional[str], canonical_url: Optional[str]) -> None:
         """Backfill phash/fingerprint/canonical on an existing row."""
         self.conn.execute(
@@ -893,12 +956,28 @@ class ListingDB:
             v = str(value).strip()
         self.conn.execute(f"UPDATE listings SET {field}=? WHERE url=?", (v, url))
         # `field` is already allowlist-validated above, so the f-string is safe.
-        self.conn.execute(
-            f"""INSERT INTO tenant_listing_state (tenant_id, listing_url, {field})
-                VALUES (?, ?, ?)
-                ON CONFLICT (tenant_id, listing_url) DO UPDATE SET {field} = excluded.{field}""",
-            (_DEFAULT_TENANT_ID, url, v),
-        )
+        if field == "user_price_value":
+            # Stamp user_price_at (tenant_listing_state only) so the API can
+            # recency-gate the override: it displays only while newer than the
+            # last scraped price re-poll. Cleared to NULL when the override is
+            # removed. See _row_to_dict in webapp/api.py.
+            ts = datetime.utcnow().isoformat() if v is not None else None
+            self.conn.execute(
+                """INSERT INTO tenant_listing_state
+                       (tenant_id, listing_url, user_price_value, user_price_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT (tenant_id, listing_url) DO UPDATE SET
+                       user_price_value = excluded.user_price_value,
+                       user_price_at = excluded.user_price_at""",
+                (_DEFAULT_TENANT_ID, url, v, ts),
+            )
+        else:
+            self.conn.execute(
+                f"""INSERT INTO tenant_listing_state (tenant_id, listing_url, {field})
+                    VALUES (?, ?, ?)
+                    ON CONFLICT (tenant_id, listing_url) DO UPDATE SET {field} = excluded.{field}""",
+                (_DEFAULT_TENANT_ID, url, v),
+            )
         self.conn.commit()
 
     def set_user_pin(self, url: str, pinned: bool) -> None:

@@ -652,11 +652,12 @@ def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
         return
     # Import here so the heavy `scrapers.facebook` module isn't loaded for
     # CLI commands that don't need it.
-    from scrapers.facebook import _read_dom_image, _fb_proxy
+    from scrapers.facebook import _read_dom_image, _read_dom_price, _fb_proxy
     from core import image_cache
 
     profile_dir = _fb_profile_dir(cfg)
     updated = unchanged = failed = prefetched = 0
+    price_changed = 0
     log.info("Refreshing image URLs for %d Facebook listing(s)", len(urls))
     # ~3-5s per listing realistic; cap at 45min as a bound against a runaway
     # loop (e.g. Playwright pipe IO hanging mid-batch). Partial progress is
@@ -676,6 +677,23 @@ def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
                     try:
                         page.goto(url, wait_until="domcontentloaded", timeout=30000)
                         time.sleep(random.uniform(1.0, 2.0))
+                        # Re-poll price in the same page load - the page is
+                        # already fetched, so this is nearly free. Prices are
+                        # otherwise frozen at first scrape.
+                        try:
+                            dp = _read_dom_price(page)
+                            if dp and dp.get("amount") is not None:
+                                pv = int(float(dp["amount"]) * 100)
+                                cur = dp.get("currency")
+                                sym = {"EUR": "€", "GBP": "£", "USD": "$"}.get(cur, cur or "")
+                                raw = f"{sym}{float(dp['amount']):,.0f}"
+                                status = db.update_price(url, pv, raw, cur)
+                                if status == "changed":
+                                    price_changed += 1
+                                    log.info("[%d/%d] Price changed: %s -> %s", i, len(urls), url[:70], raw)
+                        except Exception as exc:
+                            log.debug("[%d/%d] price re-poll failed for %s: %s", i, len(urls), url, exc)
+
                         new_img = _read_dom_image(page)
                         if not new_img:
                             failed += 1
@@ -704,8 +722,9 @@ def cmd_refresh_fb_images(cfg: dict, db: ListingDB) -> None:
         log.warning("FB image refresh exceeded 45min — committed %d of %d so far",
                     updated + unchanged + failed, len(urls))
     log.info(
-        "Refresh complete: %d updated, %d unchanged, %d failed, %d prefetched (of %d total)",
-        updated, unchanged, failed, prefetched, len(urls),
+        "Refresh complete: %d updated, %d unchanged, %d failed, %d prefetched, "
+        "%d price-changed (of %d total)",
+        updated, unchanged, failed, prefetched, price_changed, len(urls),
     )
 
 

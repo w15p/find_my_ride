@@ -136,11 +136,34 @@ def _row_to_dict(r) -> dict:
     else:
         d["display_location"] = enhance_location(d.get("location"), d.get("country_code"))
     d["display_year"] = d.get("user_year") if d.get("user_year") is not None else d.get("year")
+    # Currency correction is sticky: a user-corrected currency always wins,
+    # even across price re-polls (the scraper mislabels currency consistently).
     d["display_currency"] = d.get("user_price_currency") or d.get("price_currency")
-    # User price-amount override wins over the scraped value. Stored in cents
-    # so format_price + usd_value can consume it identically to price_value.
-    effective_pv = d.get("user_price_value") if d.get("user_price_value") is not None else d.get("price_value")
+    # User price-AMOUNT override is recency-gated: it wins only while it is
+    # at least as recent as the last price re-poll (price_checked_at). Once a
+    # newer poll lands, the scraped amount becomes authoritative and the stale
+    # manual amount is dropped. A legacy override with no timestamp
+    # (user_price_at is None), or a listing never re-polled (price_checked_at
+    # is None), keeps honouring the override for backward compatibility.
+    user_pv = d.get("user_price_value")
+    user_pv_at = d.get("user_price_at")
+    price_checked = d.get("price_checked_at")
+    override_current = user_pv is not None and (
+        user_pv_at is None or price_checked is None or user_pv_at >= price_checked
+    )
+    effective_pv = user_pv if override_current else d.get("price_value")
     d["display_price_value"] = effective_pv
+    # Price-change arrow tracks the SCRAPED price (price_value vs the previous
+    # polled value), independent of any manual override. "down" = decrease
+    # (good, green), "up" = increase (red). Null when unchanged / no history.
+    pv, prev = d.get("price_value"), d.get("prev_price_value")
+    if pv is not None and prev is not None and pv != prev:
+        d["price_direction"] = "down" if pv < prev else "up"
+    else:
+        d["price_direction"] = None
+    d["prev_display_price"] = (
+        format_price(prev, d.get("price_currency")) if prev is not None else None
+    )
     # USD conversion uses the *effective* currency so an EUR-corrected listing's
     # $ amount is recomputed at EUR→USD instead of being treated as already USD.
     usd = usd_value(effective_pv, d.get("display_currency"))
