@@ -353,6 +353,18 @@ searches:
       reject_title_keywords:
         - "sprint speciale"
         - ss
+        # Modern-GT / GTV (2003-2010 hatchback, 916-series GTV) exclusions.
+        # FB Marketplace omits the year, so year=None listings slip past the
+        # year window; these engine/spec tokens never appear on a 105-chassis
+        # classic (all inline-4: 1300/1600/1750/2000), so they cleanly reject
+        # the modern cars. Single tokens match at word boundaries.
+        - jtd       # modern common-rail diesel
+        - jtdm      # modern common-rail diesel
+        - v6        # Busso V6 - never in the 105 coupe
+        - busso     # the V6 engine by name
+        - 24v       # modern multivalve
+        - jts       # modern direct-injection petrol
+        - subaru    # "Legacy 2.5GT" etc. matching the bare "gt" query
       # Same 32-country EU allowlist as the seats hunt (Europe-only).
       allowed_country_codes:
         - AT
