@@ -242,6 +242,12 @@ _MIGRATIONS = [
     ("prev_price_value",       "ALTER TABLE listings ADD COLUMN prev_price_value INTEGER"),
     ("price_changed_at",       "ALTER TABLE listings ADD COLUMN price_changed_at TEXT"),
     ("price_checked_at",       "ALTER TABLE listings ADD COLUMN price_checked_at TEXT"),
+    # user_price_at is a per-tenant field (primary home is tenant_listing_state
+    # + _TLS_MIGRATIONS below), but listings_select_sql COALESCEs every user
+    # col across BOTH tables, so the column must also exist on `listings` or
+    # the SELECT errors with "no such column: l.user_price_at". Kept NULL here;
+    # the real value lives on tenant_listing_state.
+    ("user_price_at",          "ALTER TABLE listings ADD COLUMN user_price_at TEXT"),
 ]
 
 # Same idempotent ALTER pattern for tenant_listing_state. SCHEMA_SEARCHES
