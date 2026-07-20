@@ -75,7 +75,7 @@ class WatchedAddBody(BaseModel):
 
 
 from core.countries import enhance_location
-from core.currency import format_price, usd_value
+from core.currency import format_price, usd_value, SUPPORTED_CURRENCIES
 from core.database import ListingDB, _DEFAULT_SEARCH_SLUG, listings_select_sql, user_col_expr
 
 log = logging.getLogger(__name__)
@@ -510,7 +510,7 @@ def create_app() -> FastAPI:
                     raise HTTPException(400, f"year out of plausible range (1900–2030): {yr}")
                 db.set_user_field(body.url, "user_year", yr)
         if body.price_currency is not None:
-            allowed = {"", "EUR", "GBP", "USD"}
+            allowed = {""} | set(SUPPORTED_CURRENCIES)
             ccy = body.price_currency.strip().upper()
             if ccy not in allowed:
                 raise HTTPException(400, f"price_currency must be one of {sorted(allowed)}")

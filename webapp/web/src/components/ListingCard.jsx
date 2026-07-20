@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 
+// Currency options for the per-listing override dropdown. Keep in sync with
+// core/currency.py SUPPORTED_CURRENCIES (and its symbol map). These cover the
+// country allowlist: eurozone + GB + the non-euro EU/EEA/CH markets. usd_value
+// on the backend converts all of them.
+const CURRENCY_OPTIONS = [
+  ["EUR", "EUR €"], ["GBP", "GBP £"], ["USD", "USD $"],
+  ["DKK", "DKK kr"], ["SEK", "SEK kr"], ["NOK", "NOK kr"],
+  ["PLN", "PLN zł"], ["CHF", "CHF"], ["CZK", "CZK Kč"],
+  ["HUF", "HUF Ft"], ["RON", "RON lei"], ["BGN", "BGN лв"], ["ISK", "ISK kr"],
+];
+
 export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave, onTogglePin, onOverride, onMarkActive }) {
   const l = listing;
   const [note, setNote] = useState(l.user_note || "");
@@ -65,7 +76,10 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
     l.user_price_value !== l.price_value;
   const [priceDraft, setPriceDraft] = useState(effectivePriceWhole);
   useEffect(() => { setPriceDraft(effectivePriceWhole); }, [effectivePriceWhole]);
-  const currencySymbol = ({ EUR: "€", GBP: "£", USD: "$" })[effectiveCurrency] || effectiveCurrency || "";
+  const currencySymbol = ({
+    EUR: "€", GBP: "£", USD: "$", DKK: "kr", SEK: "kr", NOK: "kr", ISK: "kr",
+    PLN: "zł", CZK: "Kč", HUF: "Ft", RON: "lei", BGN: "лв",
+  })[effectiveCurrency] || effectiveCurrency || "";
 
   // Amber-for-RHD is a "needs your attention" cue. Once the user manually
   // acknowledges the steering side, treat it as reviewed — no amber, even
@@ -213,31 +227,40 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
               {l.price_direction === "down" ? "↓" : "↑"}
             </span>
           )}
-          {effectiveCurrency && (
-            <>
-              <select
-                value={effectiveCurrency}
-                onChange={(e) => onOverride(l.url, { price_currency: e.target.value })}
-                title={currencyOverridden ? "Currency overridden — click ↶ to restore" : "Wrong currency? Pick the correct one"}
-                className={`text-[11px] border rounded px-1 font-normal cursor-pointer ${
-                  currencyOverridden ? "border-blue-400 bg-blue-50 text-slate-700" : "border-transparent text-slate-400 hover:border-slate-300 hover:text-slate-600"
-                }`}
-              >
-                <option value="EUR">EUR €</option>
-                <option value="GBP">GBP £</option>
-                <option value="USD">USD $</option>
-              </select>
-              {currencyOverridden && (
-                <button
-                  onClick={() => onOverride(l.url, { price_currency: "" })}
-                  title="Clear override (restore scraped currency)"
-                  className="text-[10px] text-slate-400 hover:text-slate-700"
-                >
-                  ↶
-                </button>
+          {/* Always render so a listing with a missing or unsupported
+              currency (e.g. FB reporting DKK on a EUR-priced Danish car,
+              or no currency at all) can still be corrected. */}
+          <>
+            <select
+              value={effectiveCurrency || ""}
+              onChange={(e) => onOverride(l.url, { price_currency: e.target.value })}
+              title={currencyOverridden ? "Currency overridden — click ↶ to restore" : "Wrong or missing currency? Pick the correct one"}
+              className={`text-[11px] border rounded px-1 font-normal cursor-pointer ${
+                currencyOverridden ? "border-blue-400 bg-blue-50 text-slate-700"
+                  : !effectiveCurrency ? "border-amber-400 bg-amber-50 text-slate-700"
+                  : "border-transparent text-slate-400 hover:border-slate-300 hover:text-slate-600"
+              }`}
+            >
+              <option value="">— set currency —</option>
+              {CURRENCY_OPTIONS.map(([code, label]) => (
+                <option key={code} value={code}>{label}</option>
+              ))}
+              {/* Preserve an unexpected current value so the select shows it
+                  correctly and picking a standard code registers as a change. */}
+              {effectiveCurrency && !CURRENCY_OPTIONS.some(([c]) => c === effectiveCurrency) && (
+                <option value={effectiveCurrency}>{effectiveCurrency}</option>
               )}
-            </>
-          )}
+            </select>
+            {currencyOverridden && (
+              <button
+                onClick={() => onOverride(l.url, { price_currency: "" })}
+                title="Clear override (restore scraped currency)"
+                className="text-[10px] text-slate-400 hover:text-slate-700"
+              >
+                ↶
+              </button>
+            )}
+          </>
         </div>
 
         <div className="text-xs text-slate-600 flex flex-wrap gap-x-3 gap-y-1 items-center">

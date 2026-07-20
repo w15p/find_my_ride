@@ -63,7 +63,23 @@ def to_usd_str(price_value: Optional[int], currency: Optional[str]) -> Optional[
     return f"${v:,.0f}"
 
 
-_CURRENCY_SYMBOLS = {"EUR": "€", "GBP": "£", "USD": "$"}
+# ISO 4217 codes we surface in the UI - the currencies used across the
+# country allowlist (eurozone + GB + the non-euro EU/EEA/CH markets). Any
+# code here must be selectable in the ListingCard currency dropdown and
+# accepted by the /api/override validation. usd_value() converts all of them
+# (open.er-api.com returns every ISO rate); symbols below are display-only,
+# with an ISO-code fallback for the ones without a common single glyph.
+SUPPORTED_CURRENCIES = (
+    "EUR", "GBP", "USD", "DKK", "SEK", "NOK", "PLN",
+    "CHF", "CZK", "HUF", "RON", "BGN", "ISK",
+)
+
+_CURRENCY_SYMBOLS = {
+    "EUR": "€", "GBP": "£", "USD": "$",
+    "DKK": "kr", "SEK": "kr", "NOK": "kr", "ISK": "kr",
+    "PLN": "zł", "CZK": "Kč", "HUF": "Ft", "RON": "lei", "BGN": "лв",
+    # CHF has no distinct glyph in common use; ISO code reads fine.
+}
 
 
 def format_price(price_value: Optional[int], currency: Optional[str]) -> Optional[str]:
