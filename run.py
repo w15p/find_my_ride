@@ -195,7 +195,15 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
             no_year_signals = filt.get("no_year_signals") or []
             if no_year_signals:
                 title_lower = (listing.title or "").lower()
-                if not any(sig.lower() in title_lower for sig in no_year_signals):
+                # Word-boundary match, NOT naive substring: "mk i" as a
+                # substring matches inside "mk ii" (a Mk2!), which let Mk2
+                # Escorts pass the year=None gate. \b on both ends stops that
+                # - "mk i" won't match "mk ii" because the trailing i-to-i
+                # transition isn't a word boundary.
+                if not any(
+                    re.search(rf"\b{re.escape(sig.lower())}\b", title_lower)
+                    for sig in no_year_signals
+                ):
                     log.debug("Reject (no year + no signal): %s", listing.url)
                     return False
 

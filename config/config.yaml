@@ -39,18 +39,22 @@ filters:
     # legitimately titled "Mark I" / "Mark 1"; only the higher marks reject.
     - mk2
     - "mk 2"
+    - "mk ii"      # Roman: "Ford Escort MK II" slipped through (had only "mark ii")
     - "mark 2"
     - "mark ii"
     - mk3
     - "mk 3"
+    - "mk iii"
     - "mark 3"
     - "mark iii"
     - mk4
     - "mk 4"
+    - "mk iv"
     - "mark 4"
     - "mark iv"
     - mk5
     - "mk 5"
+    - "mk v"
     - "mark 5"
     - "mark v"
     - cosworth
