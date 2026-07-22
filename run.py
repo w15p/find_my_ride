@@ -172,6 +172,19 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
     other search). Missing keys are treated as "no constraint" — e.g. the
     seats hunt has no year window and a much lower price floor.
     """
+    # Required title keyword(s): the title must contain at least one. Unlike
+    # the scraper's required_keywords (an OR gate that lets a listing in if it
+    # mentions any seat-ish term), this is a mandatory model anchor. The seats
+    # search sets [escort] so "SEAT Leon" (the SEAT carmaker collides with the
+    # "seat" keyword) and non-Ford bucket seats (Bride/NRG/Mustang) - which
+    # never say "escort" - are dropped. Substring match; absent = no constraint.
+    require_any = filt.get("require_title_keywords")
+    if require_any:
+        title_lower = (listing.title or "").lower()
+        if not any(kw.lower() in title_lower for kw in require_any):
+            log.debug("Reject (missing required title keyword): %s", listing.url)
+            return False
+
     year_from = filt.get("year_from")
     year_to = filt.get("year_to")
 

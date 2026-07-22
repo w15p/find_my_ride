@@ -223,6 +223,13 @@ searches:
       # Seats don't have meaningful years; skip the cars-style year window.
       year_from: null
       year_to: null
+      # Title MUST mention "escort". The required_keywords OR-gate (seat/
+      # seats/rs2000/mexico) lets in the SEAT carmaker ("SEAT Leon", "Seat
+      # alufaelge") and non-Ford bucket seats (Bride/NRG/Mustang), which
+      # flooded the search from FB. None say "escort", so this drops them
+      # while keeping every real Escort-seat listing.
+      require_title_keywords:
+        - escort
       # FB Marketplace injects locale-personalized listings based on the
       # request's egress IP (the home reverse-SOCKS tunnel exits on a US
       # residential IP). Restrict to Europe (EU + EEA + UK + Switzerland)
