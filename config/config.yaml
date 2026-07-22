@@ -196,10 +196,12 @@ searches:
       - seats
       - rs2000
       - mexico
-    # autoscout24 + classicdriver use URL paths (/lst/ford/escort), are
-    # cars-only sites, and would surface no parts even if queried — skip.
+    # Parts marketplaces only. carandclassic REMOVED 2026-07-22: it's a
+    # whole-car site with no seat-parts inventory - all 9 results it returned
+    # were complete RS2000/Mexico CARS matched via the rs2000/mexico
+    # required_keywords ("not even seats"). autoscout24 + classicdriver are
+    # cars-only URL-path sites, never included here.
     sites:
-      - carandclassic
       - ebay
       - marktplaats
       - facebook
@@ -282,10 +284,15 @@ searches:
         # Decorative / trim parts that match "seat" but aren't the seat itself
         - "seat badge"
         - "tilt handle"
-        # Non-seat interior parts
+        # Non-seat interior parts (match via rs2000/mexico but aren't seats)
         - "centre console"
         - "center console"
         - "dash top"
+        - "battery box"
+        - "battery cover"
+        - "coin tray"
+        - "base plate"
+        - "gaiter"
         # Deliberately NOT in this list (would false-positive on legitimate
         # seats listings):
         #   "base foam"  — catches "Roll Top Seat Cover ... New Base Foams"
