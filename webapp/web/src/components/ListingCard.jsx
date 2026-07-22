@@ -117,6 +117,8 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
           ? "border-red-300 opacity-70"
           : pinned
           ? "border-amber-400 ring-2 ring-amber-200"
+          : l.priority
+          ? "border-emerald-400 ring-2 ring-emerald-200"
           : "border-slate-200"
       } shadow-sm overflow-hidden flex flex-col`}
     >
@@ -139,6 +141,14 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
         <span className="absolute top-2 left-2 bg-slate-800/80 text-white text-xs px-2 py-0.5 rounded">
           {l.site_name}
         </span>
+        {l.priority && !rejected && (
+          <span
+            className="absolute bottom-2 left-2 bg-emerald-600 text-white text-xs font-semibold px-2 py-0.5 rounded uppercase tracking-wide"
+            title={`Priority variant${l.priority_match ? `: ${l.priority_match}` : ""}`}
+          >
+            {l.priority_match || "priority"}
+          </span>
+        )}
         <button
           onClick={() => onTogglePin(l.url, pinned)}
           aria-label={pinned ? "Unpin" : "Pin to top"}

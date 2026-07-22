@@ -237,6 +237,22 @@ def create_app() -> FastAPI:
         # returns.
         return ListingDB(str(ROOT / db_path) if not Path(db_path).is_absolute() else db_path)
 
+    def _priority_keywords_for(search_id: int) -> list[str]:
+        """Lowercased priority_keywords for a search_id, or [] if none.
+
+        Resolves search_id -> slug -> cfg["searches"][slug]["priority_keywords"].
+        Priority keywords highlight + float the high-value collector variants;
+        they're config-driven and per-search, so a search without them behaves
+        exactly as before.
+        """
+        row = get_db().conn.execute(
+            "SELECT slug FROM searches WHERE id=?", (search_id,)
+        ).fetchone()
+        if not row:
+            return []
+        sc = (cfg.get("searches") or {}).get(row["slug"]) or {}
+        return [k.lower() for k in (sc.get("priority_keywords") or [])]
+
     # ── Endpoints ────────────────────────────────────────────────────────────
 
     @app.get("/api/listings")
@@ -322,6 +338,24 @@ def create_app() -> FastAPI:
             items = [i for i in items if (i["price_usd"] or 0) >= min_usd]
         if max_usd is not None:
             items = [i for i in items if (i["price_usd"] is not None and i["price_usd"] <= max_usd)]
+
+        # Priority highlight: mark items whose title contains one of the
+        # search's priority_keywords (the high-value collector variants) and
+        # float them to the top. Display-only - never suppresses. Pins still
+        # outrank priority; within each band the SQL sort order is preserved
+        # (Python's sort is stable).
+        prio_kws = _priority_keywords_for(search_id)
+        if prio_kws:
+            for i in items:
+                tl = (i.get("title") or "").lower()
+                hit = next((k for k in prio_kws if k in tl), None)
+                i["priority"] = bool(hit)
+                i["priority_match"] = hit
+            items.sort(key=lambda i: (not i.get("user_pinned"), not i.get("priority")))
+        else:
+            for i in items:
+                i["priority"] = False
+                i["priority_match"] = None
 
         # Attach duplicate-source info for canonical rows
         for item in items:

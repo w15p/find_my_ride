@@ -178,6 +178,15 @@ searches:
 
   rs2000_mexico_seats:
     label: "RS2000 / Mexico Seats"
+    # Priority (highlight + float-to-top) keywords: the high-value collector
+    # variants. Titles mentioning these are surfaced first and badged in the
+    # UI so they're never buried under the common Ghia/GL/XR3i seats. This is
+    # display-only - it does NOT bypass any filter (a whole RS2000 car still
+    # gets dropped by the price cap; a console still gets reject-keyworded).
+    priority_keywords:
+      - rs2000
+      - mexico
+      - rs1600
     # Kept deliberately broad: eBay's keyword search is AND-on-words, so a
     # narrow query like "ford escort rs2000 mexico seats" requires every one
     # of those words in the title. Most seat sellers omit "ford" and many
@@ -223,13 +232,18 @@ searches:
       # Seats don't have meaningful years; skip the cars-style year window.
       year_from: null
       year_to: null
-      # Title MUST mention "escort". The required_keywords OR-gate (seat/
-      # seats/rs2000/mexico) lets in the SEAT carmaker ("SEAT Leon", "Seat
-      # alufaelge") and non-Ford bucket seats (Bride/NRG/Mustang), which
-      # flooded the search from FB. None say "escort", so this drops them
-      # while keeping every real Escort-seat listing.
+      # Title must mention one of these (mandatory model anchor). "escort"
+      # drops the SEAT carmaker ("SEAT Leon", "Seat alufaelge") and non-Ford
+      # bucket seats (Bride/NRG/Mustang) that flooded from FB. rs2000/rs1600
+      # are included so a genuine "RS2000 seats" listing that omits the word
+      # "escort" still passes - the reject keywords + price cap + eBay seats
+      # category still filter the console/car junk those variants also match.
+      # "mexico" deliberately NOT an anchor: it's a place name and half its
+      # matches are non-seats.
       require_title_keywords:
         - escort
+        - rs2000
+        - rs1600
       # FB Marketplace injects locale-personalized listings based on the
       # request's egress IP (the home reverse-SOCKS tunnel exits on a US
       # residential IP). Restrict to Europe (EU + EEA + UK + Switzerland)
