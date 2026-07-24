@@ -167,6 +167,7 @@ searches:
       - ebay
       - marktplaats
       - facebook
+      - theparking
     # AS24 is query-driven (make/model parsed from `query`: "ford escort mk1"
     # resolves to ford/escort). The Mk1 year window still needs pinning here
     # or the result pages fill with later Escort generations.
@@ -174,6 +175,11 @@ searches:
       autoscout24:
         year_from: 1968
         year_to: 1974   # 1975+ = California emissions bracket
+      # theparking aggregates EU regional sites (bilbasen.dk, gocar.be,
+      # 2ememain, mobile.de...) our other scrapers miss. `path` is its URL
+      # slug; price-ascending page 1 (the affordable end) is fetched.
+      theparking:
+        path: ford-escort-mk1
     # filters: — read from top-level `filters:` above (Commit 1 back-compat)
 
   rs2000_mexico_seats:
@@ -351,6 +357,7 @@ searches:
       - carandclassic
       - ebay
       - facebook
+      - theparking
     site_overrides:
       # AS24 lists the 105 coupe as `alfa-romeo/gt` (not `giulia`, which
       # is the modern sedan). Force the model slug and pin the Junior
@@ -360,6 +367,10 @@ searches:
         model: gt
         year_from: 1965
         year_to: 1974   # 1975+ = California emissions bracket
+      # theparking aggregates EU regional sites our other scrapers miss.
+      # "giulia-gt" is its slug for the 105 coupe.
+      theparking:
+        path: giulia-gt
       # Classic Alfa coupes are Italy-heavy; widen beyond the GB/DE/NL
       # default. Uses the per-search marketplaces override wired in
       # scrapers/ebay.py.

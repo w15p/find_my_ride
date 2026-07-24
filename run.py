@@ -47,6 +47,7 @@ from scrapers.classicdriver import ClassicDriverScraper
 from scrapers.ebay import EbayScraper
 from scrapers.facebook import FacebookScraper, login_and_save_session
 from scrapers.marktplaats import MarktplaatsScraper
+from scrapers.theparking import TheParkingScraper
 
 SCRAPER_MAP = {
     "carandclassic": CarAndClassicScraper,
@@ -55,6 +56,7 @@ SCRAPER_MAP = {
     "marktplaats":    MarktplaatsScraper,
     "autoscout24":    AutoScout24Scraper,
     "facebook":       FacebookScraper,
+    "theparking":     TheParkingScraper,
 }
 
 # Per-site wall-clock budgets used by the watchdog in run_scrape. A site that
@@ -68,6 +70,7 @@ _SITE_BUDGETS = {
     "marktplaats":   10 * 60,
     "autoscout24":   15 * 60,
     "classicdriver": 10 * 60,
+    "theparking":     5 * 60,        # single plain-HTTP page fetch; fast
 }
 
 _DEFAULT_SOLD_SIGNALS = [
