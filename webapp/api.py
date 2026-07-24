@@ -100,13 +100,40 @@ _IMAGE_HOST_SUFFIXES = (
     ".fbcdn.net",          # FB scontent-*.xx.fbcdn.net
     ".carandclassic.com",  # safety net for any C&C subdomain
     ".ebayimg.com",        # safety net for any eBay image subdomain
+    ".leparking.fr",       # theparking's own CDN (cloud./img.leparking.fr)
 )
 
 
 def _host_allowed(host: str) -> bool:
+    """Static allowlist: the CDNs of our own site scrapers."""
     if host in _IMAGE_HOST_RULES:
         return True
     return any(host.endswith(suf) for suf in _IMAGE_HOST_SUFFIXES)
+
+
+def _host_is_scraped(db, host: str) -> bool:
+    """True if some listing we scraped has its image on `host`.
+
+    theparking is an aggregator whose listings point at the seller's own CDN
+    (img.kleinanzeigen.de, apollo.olxcdn.com, media.merrjep.al, ...), and the
+    set of source sites is open-ended - a static allowlist would silently
+    404 images every time theparking surfaces a new source. Deriving the
+    permission from the DB keeps the guard the allowlist exists for (the
+    proxy must not become an open SSRF relay into the VPC or the metadata
+    service) while self-maintaining: we will fetch a host only when one of
+    our own scrapers already stored an image there.
+    """
+    if not host or len(host) > 253:
+        return False
+    try:
+        row = db.conn.execute(
+            "SELECT 1 FROM listings WHERE image_url LIKE 'https://' || ? || '/%' "
+            "   OR image_url LIKE 'http://' || ? || '/%' LIMIT 1",
+            (host, host),
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
 
 
 def _referer_for(host: str) -> str:
@@ -374,7 +401,7 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "bad url")
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise HTTPException(400, "bad url")
-        if not _host_allowed(parsed.netloc):
+        if not _host_allowed(parsed.netloc) and not _host_is_scraped(get_db(), parsed.netloc):
             raise HTTPException(403, f"host not allowed: {parsed.netloc}")
 
         # Cache lookup first — serve from disk if we've ever successfully
