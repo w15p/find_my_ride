@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html as html_module
+import json
 import random
 import re
 import time
@@ -199,11 +200,80 @@ class TheParkingScraper(BaseScraper):
         return None
 
     @staticmethod
-    def _extract_source_content(body: str) -> Tuple[Optional[str], Optional[str]]:
-        """(description, image) from a source listing page via OpenGraph."""
-        m = _OG_DESC_RE.search(body) or _META_DESC_RE.search(body)
-        desc = html_module.unescape(m.group(1)).strip() if m else None
+    def _norm(s: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+
+    @classmethod
+    def _jsonld_descriptions(cls, body: str) -> List[str]:
+        """Every description string in the page's JSON-LD blocks."""
+        found: List[str] = []
+        for m in re.finditer(r'<script[^>]*application/ld\+json[^>]*>(.*?)</script>',
+                             body, re.S | re.I):
+            try:
+                data = json.loads(m.group(1).strip())
+            except Exception:
+                continue
+
+            def walk(node):
+                if isinstance(node, dict):
+                    d = node.get("description")
+                    if isinstance(d, str) and len(d.strip()) > 40:
+                        found.append(d.strip())
+                    for v in node.values():
+                        walk(v)
+                elif isinstance(node, list):
+                    for v in node:
+                        walk(v)
+
+            walk(data)
+        return found
+
+    @classmethod
+    def _full_description(cls, body: str) -> Optional[str]:
+        """The target listing's full seller text.
+
+        Sites truncate og:description (kleinanzeigen ships ~150 chars ending
+        in "..." plus a site suffix) while their JSON-LD carries the full
+        text - but a listing page also embeds JSON-LD for sidebar "similar
+        ads", so simply taking the longest description returns some other
+        car entirely (two different Escort pages both yielded the same BMW
+        2002 blurb). og:description is truncated but is reliably THIS
+        listing's opening, so use it as the fingerprint that picks the
+        matching JSON-LD block; fall back to it when nothing matches.
+        """
+        og_m = _OG_DESC_RE.search(body) or _META_DESC_RE.search(body)
+        og = html_module.unescape(og_m.group(1)).strip() if og_m else None
+        candidates = cls._jsonld_descriptions(body)
+        if not candidates:
+            return og
+
+        if og:
+            og_n = cls._norm(og)
+            # Compare in both directions: og may carry a price prefix the
+            # JSON-LD lacks ("28.500 EUR: Ford Escort GT..."), and the OG text
+            # is cut short, so whichever is shorter should appear in the other.
+            for cand in sorted(candidates, key=len, reverse=True):
+                cand_n = cls._norm(cand)
+                head = min(60, len(og_n), len(cand_n))
+                if head < 25:
+                    continue
+                if cand_n[:head] in og_n or og_n[:head] in cand_n:
+                    return cand
+            return og  # no JSON-LD block belongs to this listing
+
+        # No OG tag to disambiguate: only trust JSON-LD when it's unambiguous.
+        return candidates[0] if len(candidates) == 1 else None
+
+    @classmethod
+    def _extract_source_content(cls, body: str) -> Tuple[Optional[str], Optional[str]]:
+        """(description, image) from a source listing page.
+
+        JSON-LD first (full seller text), then OpenGraph / meta description
+        as a fallback for sites that ship no structured data.
+        """
+        desc = cls._full_description(body)
         if desc:
+            desc = html_module.unescape(desc)
             desc = re.sub(r"\s+\n", "\n", desc)
             desc = re.sub(r"[ \t]{2,}", " ", desc).strip()[:1000]
         mi = _OG_IMG_RE.search(body)
@@ -228,12 +298,19 @@ class TheParkingScraper(BaseScraper):
             source_url = self._resolve_source_url(body, detail_url)
             description = None
             if source_url:
-                time.sleep(random.uniform(0.4, 0.9))
-                sbody = self._get(source_url, referer=detail_url)
-                if sbody:
-                    description, src_img = self._extract_source_content(sbody)
-                    if src_img:
-                        image_url = src_img  # seller's own photo beats the CDN copy
+                # One retry: sites like leboncoin intermittently refuse a
+                # request that succeeds moments later, and without a retry
+                # that listing keeps the placeholder description forever
+                # (the scrape cycle never revisits a known listing).
+                for attempt in range(2):
+                    time.sleep(random.uniform(0.4, 0.9) + attempt * 1.5)
+                    sbody = self._get(source_url, referer=detail_url)
+                    if sbody:
+                        description, src_img = self._extract_source_content(sbody)
+                        if src_img:
+                            image_url = src_img  # seller's photo beats the CDN copy
+                        if description:
+                            break
 
             domain = (re.sub(r"^https?://(www\.)?", "", source_url).split("/")[0]
                       if source_url else card.get("source_domain"))
