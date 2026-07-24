@@ -1,32 +1,91 @@
 from __future__ import annotations
 
 import html as html_module
+import random
 import re
-from typing import List, Optional
+import time
+from typing import List, Optional, Tuple
 
-from core.http_client import polite_get
+from core.http_client import USER_AGENTS
 from core.models import Listing
 from scrapers.base import BaseScraper
 
 BASE_URL = "https://www.theparking.eu"
 # theparking.eu is a classifieds AGGREGATOR - it re-lists cars from many EU
-# source sites (gocar.be, 2ememain, mobile.de, autoscout24, carandclassic...).
-# Value here is the regional sources our dedicated scrapers DON'T cover; the
-# overlap with autoscout24 / carandclassic is handled by the phash+fingerprint
-# dedupe in run.py. Plain HTTP, server-rendered - no Playwright needed.
+# source sites (gocar.be, subito.it, leboncoin.fr, kleinanzeigen.de,
+# pistonheads, olx.pt...). Its value is the regional sources our dedicated
+# scrapers don't cover.
 #
-# The model path is per-search (site_overrides.theparking.path) because
-# theparking's slugs don't derive cleanly from make/model - "ford-escort-mk1",
-# "giulia-gt", etc. tri=prix_croissant sorts price-ascending so page 1 is the
-# affordable end (which is what survives the per-search price cap anyway).
+# theparking is a STARTING POINT, not the target: its own pages carry no
+# seller text (the detail page's meta description is just "FORD ESCORT") and
+# only thumbnail-grade images on the results page. So for each card we walk
+# through to the real listing:
+#
+#   results page  ->  /used-cars-detail/.../<ID>.html   (full-size image +
+#                                                        the outbound link)
+#   detail page   ->  /tools/<ID>/0/<x>.html            (302, needs Referer -
+#                                                        403 without one)
+#   302 Location  ->  the real source listing URL       (stored as the
+#                                                        listing url, so the
+#                                                        card links straight
+#                                                        to the seller and
+#                                                        dedupes against the
+#                                                        same URL from other
+#                                                        scrapers)
+#   source page   ->  og:description + og:image         (real seller text, so
+#                                                        the translation
+#                                                        pipeline has input)
+#
+# Roughly 60% of source sites serve us the description; the rest (gocar.be,
+# subito.it, car.gr) 403 a non-browser request. Every hop degrades
+# gracefully - a blocked source still yields a listing with the theparking
+# image and the real source URL.
 SEARCH_URL_TMPL = BASE_URL + "/used-cars/{path}.html?tri=prix_croissant"
 
-# Each listing card starts with the image/source anchor:
-#   <a rel="nofollow" class="external" name="SOURCE_DOMAIN" ... href="/tools/ID/...">
-# We split the page on that marker; everything up to the next one is one card.
+# Each result card starts with the image anchor, whose name= attribute is the
+# source site's domain. Splitting on it keeps a card's title/price/detail-link
+# together (the detail page's own og:title is a social-share string and it has
+# no price element, so the card is the reliable place to read both).
 _CARD_SPLIT = re.compile(r'<a\s+rel="nofollow"\s+class="external"\s+name="')
-
+_DETAIL_RE = re.compile(r'(/used-cars-detail/[^"]+?/[A-Z0-9]{6,}\.html)')
+_TOOLS_RE = re.compile(r'href="(/tools/[A-Z0-9]+/0/[A-Za-z]\.html)"')
+_CLOUD_IMG_RE = re.compile(r'(https://cloud\.leparking\.fr/[^"\'\s]+\.jpg)')
 _YEAR_RE = re.compile(r"\b(19[3-9]\d|20[0-2]\d)\b")
+
+_OG_DESC_RE = re.compile(
+    r'<meta[^>]*property=["\']og:description["\'][^>]*content=["\']([^"\']{25,})["\']', re.I)
+_META_DESC_RE = re.compile(
+    r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']{25,})["\']', re.I)
+_OG_IMG_RE = re.compile(
+    r'<meta[^>]*property=["\']og:image["\'][^>]*content=["\']([^"\']+)["\']', re.I)
+
+# Source-domain TLD -> ISO country. theparking carries no location field, but
+# its sources are national classifieds, so the TLD is a reliable origin
+# signal. Worth setting because country_code is the language prior for
+# detect_and_translate (langdetect alone mis-called Italian as Portuguese on
+# short, upper-case car text) and it feeds the per-search country allowlist.
+# Generic TLDs (.com/.eu/.net) yield None - unknown, which is never blocked.
+_TLD_COUNTRY = {
+    "de": "DE", "fr": "FR", "it": "IT", "es": "ES", "pt": "PT", "nl": "NL",
+    "be": "BE", "at": "AT", "ch": "CH", "dk": "DK", "se": "SE", "no": "NO",
+    "fi": "FI", "pl": "PL", "cz": "CZ", "sk": "SK", "hu": "HU", "ro": "RO",
+    "bg": "BG", "gr": "GR", "hr": "HR", "si": "SI", "ie": "IE", "lu": "LU",
+    "lt": "LT", "lv": "LV", "ee": "EE", "is": "IS", "al": "AL", "uk": "GB",
+}
+
+
+def _country_from_domain(domain: Optional[str]) -> Optional[str]:
+    """ISO country from a source domain's TLD ('www.subito.it' -> 'IT')."""
+    if not domain:
+        return None
+    parts = domain.lower().rstrip("/").split(".")
+    if len(parts) < 2:
+        return None
+    tld = parts[-1]
+    # co.uk / com.pt style second-level domains
+    if tld in ("uk", "pt", "br") and len(parts) >= 3 and parts[-2] in ("co", "com"):
+        return _TLD_COUNTRY.get(tld)
+    return _TLD_COUNTRY.get(tld)
 
 
 class TheParkingScraper(BaseScraper):
@@ -42,100 +101,182 @@ class TheParkingScraper(BaseScraper):
             )
             return []
 
-        url = SEARCH_URL_TMPL.format(path=path)
-        self.log.info("Fetching theparking: %s", url)
-        try:
-            resp = polite_get(self.http, url)
-        except Exception as exc:
-            self.log.warning("theparking request failed: %s", exc)
+        list_url = SEARCH_URL_TMPL.format(path=path)
+        self.log.info("Fetching theparking: %s", list_url)
+        body = self._get(list_url)
+        if not body:
             return []
 
-        cards = _CARD_SPLIT.split(resp.text)
+        cards = self._parse_cards(body)
+        # `max_detail` bounds the per-run cost: each listing costs up to 3
+        # requests (detail + redirect + source). Page 1 is ~27 cards.
+        cap = int((self.extra_params or {}).get("max_detail", 30))
+        cards = [c for c in cards if self.title_matches_search(c["title"])][:cap]
+        self.log.info("theparking: %d cards matched, walking through to source", len(cards))
+
         results: List[Listing] = []
-        for seg in cards[1:]:
-            listing = self._parse_card(seg)
+        for i, card in enumerate(cards, 1):
+            listing = self._build_listing(card, list_url)
             if listing:
                 results.append(listing)
+            if i < len(cards):
+                time.sleep(random.uniform(0.6, 1.4))
+
         self.log.info("theparking total listings: %d", len(results))
         return results
 
-    def _parse_card(self, seg: str) -> Optional[Listing]:
-        try:
-            seg = seg[:4000]  # a card is well under this; bound the regex work
-            # Source domain is the text right after the split marker.
-            src = re.match(r'([^"]+)"', seg)
-            source = src.group(1) if src else None
-
-            # theparking numeric id (in the image filename + fav classes).
-            idm = re.search(r"_(\d{6,})\.jpg", seg) or re.search(r'data-id="(\d{6,})"', seg)
-            tp_id = idm.group(1) if idm else None
-
-            # Detail-page path (stable per-listing URL on theparking).
-            slug = re.search(r'(/used-cars-detail/[^"]+?/[A-Z0-9]{6,}\.html)', seg)
-            if not slug or not tp_id:
-                return None
-            url = BASE_URL + slug.group(1)
-
-            # Title: the image alt carries the fullest descriptor; fall back to
-            # the title-block spans (brand + model + variant).
+    def _parse_cards(self, body: str) -> List[dict]:
+        """Title, price, detail-link and source domain per result card."""
+        out: List[dict] = []
+        for seg in _CARD_SPLIT.split(body)[1:]:
+            seg = seg[:4000]
+            det = _DETAIL_RE.search(seg)
             alt = re.search(r'alt="([^"]+)"', seg)
-            title = html_module.unescape(alt.group(1).strip()) if alt else ""
-            if not title:
-                block = seg[:2500].split('class="external tag_f_titre"')
-                if len(block) > 1:
-                    spans = re.findall(r"<span[^>]*>(.*?)</span>", block[1][:400], re.S)
-                    title = " ".join(
-                        re.sub(r"<[^>]+>", "", s).strip() for s in spans if s.strip()
-                    )
-            title = re.sub(r"\s+", " ", title).strip()
-            title = title.title() if title.isupper() else title
-            if not title:
-                return None
-            if not self.title_matches_search(title):
-                return None
+            if not det or not alt:
+                continue
+            title = re.sub(r"\s+", " ", html_module.unescape(alt.group(1))).strip()
+            if title.isupper():
+                title = title.title()
+            dom = re.match(r'([^"]+)"', seg)
+            prix = re.search(r'class="prix">\s*([^<]+?)\s*</p>', seg)
+            out.append({
+                "title": title,
+                "price_raw": (html_module.unescape(prix.group(1)).replace("\xa0", " ").strip()
+                              if prix else None),
+                "detail_url": BASE_URL + det.group(1),
+                "source_domain": dom.group(1) if dom else None,
+            })
+        return out
 
-            # Price: <p class="prix"> 42 500 € </p> (or POA).
-            prm = re.search(r'class="prix">\s*([^<]+?)\s*</p>', seg)
-            raw_price = html_module.unescape(prm.group(1).strip()) if prm else None
-            price_val = None
-            currency = None
-            if raw_price:
-                digits = re.sub(r"[^\d]", "", raw_price)
-                if digits:
-                    price_val = int(digits) * 100  # EUR major -> minor units
-                    currency = "EUR"
-                    raw_price = f"€{int(digits):,}"
+    # ── HTTP ────────────────────────────────────────────────────────────────
+    def _get(self, url: str, referer: Optional[str] = None,
+             allow_redirects: bool = True, timeout: int = 20):
+        """GET returning response text, or None. Never raises."""
+        headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-GB,en;q=0.9",
+            "Upgrade-Insecure-Requests": "1",
+        }
+        if referer:
+            headers["Referer"] = referer
+        try:
+            resp = self.http.get(url, headers=headers, timeout=timeout,
+                                 allow_redirects=allow_redirects)
+            if resp.status_code != 200:
+                self.log.debug("theparking GET %s -> %s", url[:80], resp.status_code)
+                return None
+            return resp.text
+        except Exception as exc:
+            self.log.debug("theparking GET failed %s: %s", url[:80], exc)
+            return None
 
-            # Year: parse from the title/slug. Prefer a classic-plausible year.
+    def _resolve_source_url(self, detail_body: str, detail_url: str) -> Optional[str]:
+        """Follow theparking's /tools/ redirect to the real listing URL.
+
+        The redirect 403s without a Referer, so we send the detail page as
+        one. Returns the Location target, or None.
+        """
+        m = _TOOLS_RE.search(detail_body)
+        if not m:
+            return None
+        try:
+            resp = self.http.get(
+                BASE_URL + m.group(1),
+                headers={"User-Agent": random.choice(USER_AGENTS),
+                         "Referer": detail_url,
+                         "Accept-Language": "en-GB,en;q=0.9"},
+                allow_redirects=False, timeout=15,
+            )
+            loc = resp.headers.get("Location")
+            if loc and loc.startswith("http"):
+                # Strip theparking's attribution params - keeps the stored URL
+                # canonical so it dedupes against the same listing scraped
+                # directly by another site scraper.
+                return re.sub(r"[?&]utm_[^=]+=[^&]*", "", loc).rstrip("?&")
+        except Exception as exc:
+            self.log.debug("theparking redirect resolve failed: %s", exc)
+        return None
+
+    @staticmethod
+    def _extract_source_content(body: str) -> Tuple[Optional[str], Optional[str]]:
+        """(description, image) from a source listing page via OpenGraph."""
+        m = _OG_DESC_RE.search(body) or _META_DESC_RE.search(body)
+        desc = html_module.unescape(m.group(1)).strip() if m else None
+        if desc:
+            desc = re.sub(r"\s+\n", "\n", desc)
+            desc = re.sub(r"[ \t]{2,}", " ", desc).strip()[:1000]
+        mi = _OG_IMG_RE.search(body)
+        img = html_module.unescape(mi.group(1)).strip() if mi else None
+        return desc or None, img or None
+
+    # ── Parsing ─────────────────────────────────────────────────────────────
+    def _build_listing(self, card: dict, list_url: str) -> Optional[Listing]:
+        detail_url = card["detail_url"]
+        body = self._get(detail_url, referer=list_url)
+        if not body:
+            return None
+        try:
+            title = card["title"]
+            raw_price, price_val, currency = self._parse_price(card["price_raw"])
+
+            # Full-size image on theparking's CDN - present on ~every detail
+            # page, and the fallback when the source blocks us.
+            im = _CLOUD_IMG_RE.search(body)
+            image_url = im.group(1) if im else None
+
+            source_url = self._resolve_source_url(body, detail_url)
+            description = None
+            if source_url:
+                time.sleep(random.uniform(0.4, 0.9))
+                sbody = self._get(source_url, referer=detail_url)
+                if sbody:
+                    description, src_img = self._extract_source_content(sbody)
+                    if src_img:
+                        image_url = src_img  # seller's own photo beats the CDN copy
+
+            domain = (re.sub(r"^https?://(www\.)?", "", source_url).split("/")[0]
+                      if source_url else card.get("source_domain"))
+            if not description:
+                # No seller text (source blocked or has no OG tags). Say where
+                # it came from so the card isn't blank; nothing to translate.
+                description = (f"Listed via theparking.eu (source: {domain})"
+                               if domain else "Listed via theparking.eu")
+
             year = None
-            for m in _YEAR_RE.findall(title + " " + slug.group(1).replace("-", " ")):
-                y = int(m)
-                if 1950 <= y <= 1990:
-                    year = y
+            for y in _YEAR_RE.findall(title + " " + detail_url.replace("-", " ")):
+                if 1950 <= int(y) <= 1990:
+                    year = int(y)
                     break
 
-            # Image on leparking.fr CDN.
-            img = re.search(r'src="(https://img\.leparking\.fr/[^"]+)"', seg)
-            image_url = img.group(1) if img else None
-
-            # Source site surfaced in the description so the review UI shows
-            # where the aggregator pulled it from. No location/country in the
-            # card - left None (the country allowlist treats unknown as
-            # not-blocked; theparking's sources are EU).
-            description = f"via theparking (source: {source})" if source else "via theparking"
-
             return Listing(
-                url=url,
+                # The real seller URL when we resolved it: the card then links
+                # straight through, and an identical URL from another scraper
+                # dedupes for free. theparking's own page is the fallback.
+                url=source_url or detail_url,
                 site_name=self.site_name,
                 title=title,
                 price=raw_price,
                 price_value=price_val,
                 price_currency=currency,
                 year=year,
+                country_code=_country_from_domain(domain),
                 image_url=image_url,
                 steering="unknown",
                 description=description,
             )
         except Exception as exc:
-            self.log.debug("theparking card parse error: %s", exc)
+            self.log.debug("theparking detail parse error %s: %s", detail_url[:70], exc)
             return None
+
+    @staticmethod
+    def _parse_price(raw: Optional[str]) -> Tuple[Optional[str], Optional[int], Optional[str]]:
+        """Card price text -> (display, minor units, ISO). theparking prices
+        are euro-normalised across sources; "POA" yields no value."""
+        if not raw:
+            return None, None, None
+        digits = re.sub(r"[^\d]", "", raw)
+        if not digits:
+            return raw, None, None          # e.g. "POA"
+        val = int(digits)
+        return f"€{val:,}", val * 100, "EUR"

@@ -70,7 +70,7 @@ _SITE_BUDGETS = {
     "marktplaats":   10 * 60,
     "autoscout24":   15 * 60,
     "classicdriver": 10 * 60,
-    "theparking":     5 * 60,        # single plain-HTTP page fetch; fast
+    "theparking":    20 * 60,        # walks results -> detail -> source per listing
 }
 
 _DEFAULT_SOLD_SIGNALS = [
