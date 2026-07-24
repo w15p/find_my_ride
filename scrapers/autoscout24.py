@@ -7,7 +7,7 @@ from typing import List, Optional
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 from core.http_client import USER_AGENTS
-from core.models import Listing
+from core.models import Listing, MAX_DESCRIPTION_CHARS
 from scrapers.base import BaseScraper
 
 BASE_URL = "https://www.autoscout24.com"
@@ -218,7 +218,7 @@ class AutoScout24Scraper(BaseScraper):
         for listing in results:
             desc = self._fetch_description(listing.url)
             if desc:
-                listing.description = desc[:1000]
+                listing.description = desc[:MAX_DESCRIPTION_CHARS]
             # Polite: AS24 rate-limits on rapid detail hits from a single IP.
             time.sleep(random.uniform(0.4, 1.0))
 

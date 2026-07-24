@@ -10,7 +10,7 @@ from urllib.parse import quote_plus, urljoin
 from bs4 import BeautifulSoup
 
 from core.http_client import polite_get
-from core.models import Listing
+from core.models import Listing, MAX_DESCRIPTION_CHARS
 from scrapers.base import BaseScraper
 
 API_TOKEN_URL = "https://auth.marktplaats.nl/oauth/token"
@@ -116,7 +116,7 @@ class MarktplaatsScraper(BaseScraper):
             year = _extract_year(title)
 
             description_raw = ad.get("description") or ""
-            description = re.sub(r"\s+", " ", description_raw).strip()[:1000] or None
+            description = re.sub(r"\s+", " ", description_raw).strip()[:MAX_DESCRIPTION_CHARS] or None
 
             return Listing(
                 url=url,
@@ -193,7 +193,7 @@ class MarktplaatsScraper(BaseScraper):
             image = data.get("image")
             image_url = image[0] if isinstance(image, list) else image
             description_raw = data.get("description") or ""
-            description = re.sub(r"\s+", " ", description_raw).strip()[:1000] or None
+            description = re.sub(r"\s+", " ", description_raw).strip()[:MAX_DESCRIPTION_CHARS] or None
             return Listing(
                 url=url,
                 site_name=self.site_name,
@@ -228,7 +228,7 @@ class MarktplaatsScraper(BaseScraper):
             img = card.select_one("img")
             image_url = img.get("src") or img.get("data-src") if img else None
             desc_el = card.select_one("[class*='description'], p")
-            description = desc_el.get_text(strip=True)[:1000] if desc_el else None
+            description = desc_el.get_text(strip=True)[:MAX_DESCRIPTION_CHARS] if desc_el else None
             return Listing(
                 url=url,
                 site_name=self.site_name,

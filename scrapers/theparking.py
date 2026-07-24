@@ -8,7 +8,7 @@ import time
 from typing import List, Optional, Tuple
 
 from core.http_client import USER_AGENTS
-from core.models import Listing
+from core.models import Listing, MAX_DESCRIPTION_CHARS
 from scrapers.base import BaseScraper
 
 BASE_URL = "https://www.theparking.eu"
@@ -275,7 +275,7 @@ class TheParkingScraper(BaseScraper):
         if desc:
             desc = html_module.unescape(desc)
             desc = re.sub(r"\s+\n", "\n", desc)
-            desc = re.sub(r"[ \t]{2,}", " ", desc).strip()[:1000]
+            desc = re.sub(r"[ \t]{2,}", " ", desc).strip()[:MAX_DESCRIPTION_CHARS]
         mi = _OG_IMG_RE.search(body)
         img = html_module.unescape(mi.group(1)).strip() if mi else None
         return desc or None, img or None

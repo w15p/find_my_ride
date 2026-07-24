@@ -9,7 +9,7 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 
 from core.http_client import polite_get
-from core.models import Listing
+from core.models import Listing, MAX_DESCRIPTION_CHARS
 from scrapers.base import BaseScraper
 
 BASE_URL = "https://www.carandclassic.com"
@@ -87,9 +87,9 @@ class CarAndClassicScraper(BaseScraper):
             if detail:
                 if listing.description:
                     combined = f"{listing.description}\n\n{detail}"
-                    listing.description = combined[:1000]
+                    listing.description = combined[:MAX_DESCRIPTION_CHARS]
                 else:
-                    listing.description = detail[:1000]
+                    listing.description = detail[:MAX_DESCRIPTION_CHARS]
 
         self.log.info("Car & Classic total listings: %d", len(results))
         return results
@@ -130,7 +130,7 @@ class CarAndClassicScraper(BaseScraper):
             model = _model_word_from_title(title)
             if model:
                 text = re.sub(r"\*{3,}", model, text)
-        return text[:1000] or None
+        return text[:MAX_DESCRIPTION_CHARS] or None
 
     def _parse_item(self, item: dict) -> Optional[Listing]:
         try:

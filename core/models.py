@@ -4,6 +4,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+# Cap on stored seller descriptions. Was 1000 across every scraper, which cut
+# real listings mid-sentence ("...Windshield, rear window, side window and").
+# Kept just under translate_to_english's 4500-char input limit so a stored
+# description is always translated in full - a larger cap here would leave the
+# English text silently short of the original. The review card clamps to three
+# lines and opens the full text in a modal, so length costs nothing visually.
+MAX_DESCRIPTION_CHARS = 4000
+
 
 @dataclass
 class Listing:

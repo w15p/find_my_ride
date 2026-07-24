@@ -10,7 +10,7 @@ from typing import List, Optional
 
 from core.countries import country_from_display
 from core.http_client import USER_AGENTS
-from core.models import Listing
+from core.models import Listing, MAX_DESCRIPTION_CHARS
 from scrapers.base import BaseScraper
 
 BASE_URL = "https://www.facebook.com"
@@ -295,7 +295,7 @@ def _build_listing_from_relay(data: dict, url: str, log) -> Optional[Listing]:
 
         image_url = data.get("_image_url")
 
-        description = re.sub(r"\s+", " ", desc).strip()[:1000] or None
+        description = re.sub(r"\s+", " ", desc).strip()[:MAX_DESCRIPTION_CHARS] or None
 
         return Listing(
             url=url,

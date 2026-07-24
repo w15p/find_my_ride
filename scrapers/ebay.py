@@ -5,7 +5,7 @@ import re
 import time
 from typing import List, Optional
 
-from core.models import Listing
+from core.models import Listing, MAX_DESCRIPTION_CHARS
 from scrapers.base import BaseScraper
 
 OAUTH_URL = "https://api.ebay.com/identity/v1/oauth2/token"
@@ -134,7 +134,7 @@ class EbayScraper(BaseScraper):
             short = data.get("shortDescription") or ""
             short = " ".join(short.split())
             if short:
-                listing.description = short[:1000]
+                listing.description = short[:MAX_DESCRIPTION_CHARS]
 
     def _search_marketplace(
         self, token: str, marketplace: str, category_id: Optional[str] = None
@@ -248,7 +248,7 @@ class EbayScraper(BaseScraper):
                     image_url = f"https://i.ebayimg.com/images/g/{m.group(1)}/s-l1600.jpg"
 
             description_raw = item.get("shortDescription") or ""
-            description = re.sub(r"\s+", " ", description_raw).strip()[:1000] or None
+            description = re.sub(r"\s+", " ", description_raw).strip()[:MAX_DESCRIPTION_CHARS] or None
 
             return Listing(
                 url=url,
