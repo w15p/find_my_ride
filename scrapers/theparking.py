@@ -228,6 +228,28 @@ class TheParkingScraper(BaseScraper):
             walk(data)
         return found
 
+    @staticmethod
+    def _microdata_descriptions(body: str) -> List[str]:
+        """Descriptions from schema.org microdata (`itemprop="description"`).
+
+        Needed for sites that ship no JSON-LD and truncate their og tag -
+        motorsportmarkt.de cuts og:description to 129 chars with an ellipsis
+        while its microdata holds the full 580. Parsed with BeautifulSoup
+        rather than a regex: the container has nested tags, and a non-greedy
+        regex stops at the first inner </div> (191 of 580 chars here).
+        """
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(body, "html.parser")
+            out = []
+            for el in soup.select('[itemprop="description"]'):
+                t = el.get_text(" ", strip=True)
+                if len(t) > 40:
+                    out.append(re.sub(r"\s+", " ", t).strip())
+            return out
+        except Exception:
+            return []
+
     @classmethod
     def _full_description(cls, body: str) -> Optional[str]:
         """The target listing's full seller text.
@@ -243,7 +265,7 @@ class TheParkingScraper(BaseScraper):
         """
         og_m = _OG_DESC_RE.search(body) or _META_DESC_RE.search(body)
         og = html_module.unescape(og_m.group(1)).strip() if og_m else None
-        candidates = cls._jsonld_descriptions(body)
+        candidates = cls._jsonld_descriptions(body) + cls._microdata_descriptions(body)
         if not candidates:
             return og
 
