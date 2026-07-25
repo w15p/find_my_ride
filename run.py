@@ -70,7 +70,7 @@ _SITE_BUDGETS = {
     "marktplaats":   10 * 60,
     "autoscout24":   15 * 60,
     "classicdriver": 10 * 60,
-    "theparking":    20 * 60,        # walks results -> detail -> source per listing
+    "theparking":    30 * 60,        # paginates, then walks detail -> source per listing
 }
 
 _DEFAULT_SOLD_SIGNALS = [
@@ -463,12 +463,19 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
                 log.warning("Unknown site: %s — skipping", site_key)
                 continue
             site_config = sites_cfg.get(site_key, {})
+            # Hand the search's save-time filters to the scraper under a
+            # reserved key alongside its per-site overrides. A scraper that
+            # paginates a price-sorted feed (theparking) can then stop as soon
+            # as it passes the price ceiling instead of walking pages whose
+            # every listing _should_keep would discard - and the ceiling stays
+            # defined once, in filters, rather than duplicated per site.
             scraper = SCRAPER_MAP[site_key](
                 config=site_config,
                 http_client=session,
                 query=search_cfg.get("query", "ford escort mk1"),
                 required_keywords=search_cfg.get("required_keywords", ("escort",)),
-                extra_params=site_overrides.get(site_key),
+                extra_params={**(site_overrides.get(site_key) or {}),
+                              "_search_filters": search_filters},
             )
             log.info("Running scraper: %s (search=%s)", site_key, slug)
 

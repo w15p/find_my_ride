@@ -108,11 +108,25 @@ class TheParkingScraper(BaseScraper):
         if not body:
             return []
 
-        cards = self._parse_cards(body)
+        cards = self._paginate(list_url, body)
+
+        # Drop cards the save-time filter would discard before spending three
+        # requests each walking through to their source. Over-cap cards are
+        # pure waste; POA cards have no price to judge, so they stay.
+        max_usd = ((self.extra_params or {}).get("_search_filters") or {}).get("max_price_usd")
+        before = len(cards)
+        cards = [c for c in cards
+                 if self.title_matches_search(c["title"])
+                 and not self._card_over_cap(c, max_usd)]
         # `max_detail` bounds the per-run cost: each listing costs up to 3
-        # requests (detail + redirect + source). Page 1 is ~27 cards.
-        cap = int((self.extra_params or {}).get("max_detail", 30))
-        cards = [c for c in cards if self.title_matches_search(c["title"])][:cap]
+        # requests (detail + redirect + source).
+        self.log.info("theparking: %d cards -> %d after title/price filter",
+                      before, len(cards))
+        cap = int((self.extra_params or {}).get("max_detail", 120))
+        if len(cards) > cap:
+            self.log.info("theparking: capping detail walk at %d of %d matched cards",
+                          cap, len(cards))
+            cards = cards[:cap]
         self.log.info("theparking: %d cards matched, walking through to source", len(cards))
 
         results: List[Listing] = []
@@ -125,6 +139,129 @@ class TheParkingScraper(BaseScraper):
 
         self.log.info("theparking total listings: %d", len(results))
         return results
+
+    def _paginate(self, list_url: str, first_body: str) -> List[dict]:
+        """Cards from page 1 onward, stopping once past the price ceiling.
+
+        theparking paginates in JS: `ctrl.set_pageReload(n)` sets
+        `context.cur_page` and submits the hidden #fullreload form, i.e. a
+        POST to the same URL carrying the page state as JSON in an `ajax`
+        field. Replaying that POST gets page n without a browser.
+
+        Results are price-ascending (tri=prix_croissant), so once a page's
+        dearest listing is over the search's max_price_usd every later page
+        is too - we stop rather than walking pages whose every listing
+        _should_keep would discard.
+        """
+        filters = (self.extra_params or {}).get("_search_filters") or {}
+        max_usd = filters.get("max_price_usd")
+        max_pages = int((self.extra_params or {}).get("max_pages", 10))
+
+        cards = self._parse_cards(first_body)
+        ctx = self._parse_context(first_body)
+        if not ctx:
+            self.log.debug("theparking: no page context found - single page only")
+            return cards
+
+        total = None
+        try:
+            total = int(str(ctx.get("nb_results", "")).strip() or 0) or None
+        except ValueError:
+            pass
+        per_page = max(len(cards), 1)
+        last_page = min(max_pages, -(-total // per_page)) if total else max_pages
+
+        page = 1
+        while page < last_page:
+            if self._page_exceeds_cap(cards, max_usd):
+                self.log.info(
+                    "theparking: page %d already past the price ceiling - stopping", page)
+                break
+            page += 1
+            body = self._post_page(list_url, ctx, page)
+            if not body:
+                break
+            more = self._parse_cards(body)
+            if not more:
+                break
+            known = {c["detail_url"] for c in cards}
+            fresh = [c for c in more if c["detail_url"] not in known]
+            self.log.info("theparking: page %d -> %d cards (%d new)",
+                          page, len(more), len(fresh))
+            if not fresh:
+                break
+            cards.extend(fresh)
+            time.sleep(random.uniform(0.8, 1.6))
+        return cards
+
+    @staticmethod
+    def _parse_context(body: str) -> Optional[dict]:
+        """The `var context = {...}` blob the pagination POST replays."""
+        m = re.search(r"var\s+context\s*=\s*(\{.*?\});", body, re.S)
+        if not m:
+            return None
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            return None
+
+    def _post_page(self, list_url: str, ctx: dict, page: int) -> Optional[str]:
+        payload = dict(ctx)
+        payload["cur_page"] = page
+        try:
+            resp = self.http.post(
+                list_url,
+                data={"reload": "1", "ajax": json.dumps(payload), "tab": "{}"},
+                headers={"User-Agent": random.choice(USER_AGENTS),
+                         "Referer": list_url,
+                         "Accept-Language": "en-GB,en;q=0.9",
+                         "Content-Type": "application/x-www-form-urlencoded"},
+                timeout=25,
+            )
+            return resp.text if resp.status_code == 200 else None
+        except Exception as exc:
+            self.log.debug("theparking page %d POST failed: %s", page, exc)
+            return None
+
+    @staticmethod
+    def _card_over_cap(card: dict, max_usd: Optional[int]) -> bool:
+        """True when a card's own price is already over the ceiling.
+
+        POA (no price) returns False - we can't judge it here, so it goes
+        through and _should_keep decides.
+        """
+        if not max_usd:
+            return False
+        digits = re.sub(r"[^\d]", "", card.get("price_raw") or "")
+        if not digits:
+            return False
+        from core.currency import usd_value
+        usd = usd_value(int(digits) * 100, "EUR")
+        return usd is not None and usd > max_usd
+
+    @staticmethod
+    def _page_exceeds_cap(cards: List[dict], max_usd: Optional[int]) -> bool:
+        """True when the ascending feed has passed the price ceiling.
+
+        Judged on the LAST priced card in document order, not the dearest on
+        the page: sponsored cards are injected at the top out of sort order
+        (a search's page 1 can open with a promoted listing far above the
+        run of genuine ascending prices), so a max-based test would stop
+        early and lose the cheaper listings on later pages. POA cards carry
+        no price, so we walk back to the last card that has one; a page of
+        nothing but POA keeps us going rather than stopping blind.
+        """
+        if not max_usd:
+            return False
+        from core.currency import usd_value
+        for c in reversed(cards):
+            digits = re.sub(r"[^\d]", "", c.get("price_raw") or "")
+            if not digits:
+                continue
+            usd = usd_value(int(digits) * 100, "EUR")
+            if usd is not None:
+                return usd > max_usd
+        return False
 
     def _parse_cards(self, body: str) -> List[dict]:
         """Title, price, detail-link and source domain per result card."""
