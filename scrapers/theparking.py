@@ -387,6 +387,41 @@ class TheParkingScraper(BaseScraper):
         except Exception:
             return []
 
+    # Containers that hold the seller's free text on sites which ship only a
+    # truncated copy in their meta tags and JSON-LD. `data-collapsable` and
+    # `Description-module-*` are the Marktplaats-family markup (2ememain.be,
+    # 2dehands, marktplaats.nl); the trailing generic selectors catch the
+    # long tail. Anything harvested here still has to pass the og-fingerprint
+    # check, which is what stops a sidebar "similar ads" block winning.
+    _DESC_SELECTORS = (
+        '[data-collapsable="description"]',
+        '[class*="Description-module-description"]',
+        '#viewad-description-text',
+        '[class*="description-text"]',
+        '[class*="ad-description"]',
+        '[id*="description"]',
+    )
+
+    @classmethod
+    def _container_descriptions(cls, body: str) -> List[str]:
+        """Seller text pulled from known description containers."""
+        try:
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(body, "html.parser")
+        except Exception:
+            return []
+        out: List[str] = []
+        for sel in cls._DESC_SELECTORS:
+            try:
+                els = soup.select(sel)
+            except Exception:
+                continue
+            for el in els:
+                t = el.get_text("\n", strip=True)
+                if len(t) > 40:
+                    out.append(re.sub(r"\n{3,}", "\n\n", t).strip())
+        return out
+
     @classmethod
     def _full_description(cls, body: str) -> Optional[str]:
         """The target listing's full seller text.
@@ -402,7 +437,9 @@ class TheParkingScraper(BaseScraper):
         """
         og_m = _OG_DESC_RE.search(body) or _META_DESC_RE.search(body)
         og = html_module.unescape(og_m.group(1)).strip() if og_m else None
-        candidates = cls._jsonld_descriptions(body) + cls._microdata_descriptions(body)
+        candidates = (cls._jsonld_descriptions(body)
+                      + cls._microdata_descriptions(body)
+                      + cls._container_descriptions(body))
         if not candidates:
             return og
 
