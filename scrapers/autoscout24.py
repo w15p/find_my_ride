@@ -136,17 +136,24 @@ class AutoScout24Scraper(BaseScraper):
                 self.query,
             )
             return []
+        # `model` may be a list: one car can sit under several AS24 model
+        # slugs. The Alfa 105 coupe is the case in point - it was badged
+        # Giulia Sprint GT, then 1750 GT Veloce, then 2000 GT Veloce, so its
+        # listings are split across /gt, /1750, /2000 and /gtv. Searching a
+        # single slug silently misses most of them.
+        models = model if isinstance(model, (list, tuple)) else [model]
         self._year_from = self.extra_params.get("year_from", self.config.get("year_from"))
         self._year_to = self.extra_params.get("year_to", self.config.get("year_to"))
         year_from, year_to = self._year_from, self._year_to
         self.log.info(
-            "AutoScout24 search: make=%s model=%s years=%s-%s",
-            make, model or "(any)",
+            "AutoScout24 search: make=%s models=%s years=%s-%s",
+            make, [m or "(any)" for m in models],
             year_from if year_from is not None else "",
             year_to if year_to is not None else "",
         )
 
         results: List[Listing] = []
+        seen_urls: set[str] = set()
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -157,56 +164,58 @@ class AutoScout24Scraper(BaseScraper):
             )
             page = context.new_page()
 
-            for page_num in range(1, max_pages + 1):
-                url = _build_search_url(make, model, countries, year_from, year_to, page_num)
-                self.log.info("AutoScout24 page %d: %s", page_num, url)
+            for model in models:
+              for page_num in range(1, max_pages + 1):
+                  url = _build_search_url(make, model, countries, year_from, year_to, page_num)
+                  self.log.info("AutoScout24 %s page %d: %s", model or "(any)", page_num, url)
 
-                try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=timeout)
-                except Exception as exc:
-                    self.log.warning("Navigation failed on page %d: %s", page_num, exc)
-                    break
+                  try:
+                      page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+                  except Exception as exc:
+                      self.log.warning("Navigation failed on page %d: %s", page_num, exc)
+                      break
 
-                # Accept cookie consent banner (first page only)
-                if page_num == 1:
-                    try:
-                        page.click(COOKIE_CONSENT_SELECTOR, timeout=5000)
-                        time.sleep(1)
-                    except Exception:
-                        pass
+                  # Accept cookie consent banner (first page only)
+                  if page_num == 1:
+                      try:
+                          page.click(COOKIE_CONSENT_SELECTOR, timeout=5000)
+                          time.sleep(1)
+                      except Exception:
+                          pass
 
-                # Wait for listing cards to appear
-                try:
-                    page.wait_for_selector(LISTING_SELECTOR, timeout=15000)
-                except Exception:
-                    self.log.info("No listings found on page %d — stopping", page_num)
-                    break
+                  # Wait for listing cards to appear
+                  try:
+                      page.wait_for_selector(LISTING_SELECTOR, timeout=15000)
+                  except Exception:
+                      self.log.info("No listings found on page %d — stopping", page_num)
+                      break
 
-                cards = page.query_selector_all(LISTING_SELECTOR)
-                if not cards:
-                    self.log.info("Empty page %d — stopping", page_num)
-                    break
+                  cards = page.query_selector_all(LISTING_SELECTOR)
+                  if not cards:
+                      self.log.info("Empty page %d — stopping", page_num)
+                      break
 
-                # Scroll each card into view to trigger the lazy-loaded image,
-                # otherwise the <img> src is a placeholder at read time.
-                for card in cards:
-                    try:
-                        card.scroll_into_view_if_needed(timeout=2000)
-                    except Exception:
-                        pass
-                time.sleep(1.5)
+                  # Scroll each card into view to trigger the lazy-loaded image,
+                  # otherwise the <img> src is a placeholder at read time.
+                  for card in cards:
+                      try:
+                          card.scroll_into_view_if_needed(timeout=2000)
+                      except Exception:
+                          pass
+                  time.sleep(1.5)
 
-                for card in cards:
-                    listing = self._parse_card(card)
-                    if listing:
-                        results.append(listing)
+                  for card in cards:
+                      listing = self._parse_card(card)
+                      if listing and listing.url not in seen_urls:
+                          seen_urls.add(listing.url)
+                          results.append(listing)
 
-                # Polite delay between pages
-                time.sleep(random.uniform(3.0, 7.0))
+                  # Polite delay between pages
+                  time.sleep(random.uniform(3.0, 7.0))
 
-                # Check for "no more results"
-                if len(cards) < 20 and page_num > 1:
-                    break
+                  # Check for "no more results"
+                  if len(cards) < 20 and page_num > 1:
+                      break
 
             browser.close()
 

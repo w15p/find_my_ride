@@ -68,7 +68,7 @@ _SITE_BUDGETS = {
     "ebay":         45 * 60,        # 45m — observed 20min retry storm 2026-05-22
     "carandclassic": 10 * 60,
     "marktplaats":   10 * 60,
-    "autoscout24":   15 * 60,
+    "autoscout24":   30 * 60,        # multi-model searches walk several slugs
     "classicdriver": 10 * 60,
     "theparking":    30 * 60,        # paginates, then walks detail -> source per listing
 }

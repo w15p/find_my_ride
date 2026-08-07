@@ -364,7 +364,13 @@ searches:
       # production years so the URL filter excludes the 2003-2010 GT
       # hatchback that shares the slug.
       autoscout24:
-        model: gt
+        # The 105 coupe changed name mid-life - Giulia Sprint GT, then
+        # 1750 GT Veloce (1967-72), then 2000 GT Veloce (1971-76) - so AS24
+        # splits it across four model slugs. Searching only /gt missed most
+        # of the 1750/2000 GTVs. (/1750-gt, /2000-gt and /giulia-gt are NOT
+        # valid slugs: AS24 silently falls back to a generic Alfa list,
+        # which is where Spiders and 2600 Zagatos leak in.)
+        model: [gt, "1750", "2000", gtv]
         year_from: 1965
         year_to: 1974   # 1975+ = California emissions bracket
       # theparking aggregates EU regional sites our other scrapers miss.
@@ -396,6 +402,13 @@ searches:
       reject_title_keywords:
         - "sprint speciale"
         - ss
+        # Not the GT coupe: the /1750 and /2000 AS24 slugs also carry the
+        # Berlina saloon, and the make-level fallback lists carry Spiders.
+        - spider
+        - duetto      # the Spider by its own name
+        - berlina
+        - zagato
+        - junior z    # Junior Zagato
         # Modern-GT / GTV (2003-2010 hatchback, 916-series GTV) exclusions.
         # FB Marketplace omits the year, so year=None listings slip past the
         # year window; these engine/spec tokens never appear on a 105-chassis
