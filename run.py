@@ -609,6 +609,30 @@ def _process_watched_urls(
     return new_listings
 
 
+_SCRIPT_STYLE_RE = re.compile(
+    r"<(script|style|noscript|template)\b[^>]*>.*?</\1>", re.S | re.I)
+_TAG_RE = re.compile(r"<[^>]+>")
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+
+
+def _visible_text(html: str) -> str:
+    """Strip scripts, styles and markup, leaving roughly what a reader sees.
+
+    Sold-detection must never look at embedded JavaScript. AutoScout24 ships
+    its client-side i18n dictionary inline on every detail page, including
+    `"detailpage.gonePage.title":"This listing no longer exists."` - a
+    sold-signal phrase that is present whether or not the car is still for
+    sale. Matching the raw HTML therefore marked live listings sold: it
+    killed all 57 AS24 rows, among them every GTV added the previous day.
+    """
+    if not html:
+        return ""
+    text = _SCRIPT_STYLE_RE.sub(" ", html)
+    text = _COMMENT_RE.sub(" ", text)
+    text = _TAG_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", text)
+
+
 def _has_word_boundary_signal(body_lower: str, sig: str) -> bool:
     """Match `sig` in `body_lower` with word boundaries for single tokens,
     substring for multi-word phrases."""
@@ -892,7 +916,7 @@ def _validate_http(session, db: ListingDB, urls: list[str], sold_signals: list[s
     for url in urls:
         try:
             resp = polite_get(session, url, min_delay=1.0, max_delay=3.0)
-            if _is_sold_by_text(resp.text, sold_signals):
+            if _is_sold_by_text(_visible_text(resp.text), sold_signals):
                 new_count = db.increment_sold_signal(url)
                 if new_count >= threshold:
                     log.info("Marking sold (strike %d): %s", new_count, url)
