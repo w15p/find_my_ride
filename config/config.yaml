@@ -532,6 +532,13 @@ validate:
     - "now sold"
     - "sold subject to"
     - "verkauft am"
+    # German removal notice ("Dieses Fahrzeug ist leider nicht mehr
+    # verfuegbar."). Truncated before the umlaut so it matches whichever of
+    # verfuegbar/verfugbar the page encoding yields, and stays ASCII here.
+    # Checked against live AutoScout24 pages: absent from both the rendered
+    # text and the raw HTML, so it will not repeat the i18n-bundle
+    # false-positive that the English phrase caused.
+    - "nicht mehr verf"
     - "reeds verkocht"
     - vendu
     - venduto

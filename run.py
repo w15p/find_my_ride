@@ -943,8 +943,12 @@ def _validate_http(session, db: ListingDB, urls: list[str], sold_signals: list[s
                 db.reset_sold_signal(url)
         except Exception as exc:
             status_code = getattr(exc.response, "status_code", None) if hasattr(exc, "response") else None
-            if status_code == 404:
-                log.info("Marking expired (404): %s", url)
+            # 410 Gone is what AutoScout24 returns for a pulled listing, in every
+            # locale. Both codes bypass the strike threshold: unlike a text match
+            # they can't be tripped by unrelated copy on a live page, so a single
+            # observation is conclusive.
+            if status_code in (404, 410):
+                log.info("Marking expired (%d): %s", status_code, url)
                 db.mark_status(url, "expired")
             else:
                 log.debug("Could not validate %s: %s", url, exc)
