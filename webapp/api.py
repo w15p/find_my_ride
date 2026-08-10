@@ -538,6 +538,22 @@ def create_app() -> FastAPI:
         db.set_user_reject(body.url, None, rejected=False)
         return {"ok": True}
 
+    @app.patch("/api/reject-reason")
+    def update_reject_reason(body: RejectBody = Body(...)):
+        """Relabel an already-rejected listing without un-rejecting it.
+
+        Rejections are training data, so the reason needs to be correctable
+        in place. Going via un-reject then re-reject would restamp
+        user_rejected_at, losing when the call was actually made.
+        """
+        reason = (body.reason or "").strip()
+        if not reason:
+            raise HTTPException(400, "reason is required")
+        db = get_db()
+        if not db.update_reject_reason(body.url, reason):
+            raise HTTPException(409, "listing is not rejected")
+        return {"ok": True}
+
     @app.post("/api/active")
     def mark_active(body: UnrejectBody = Body(...)):
         """Flip a sold-marked listing back to active. Recovers from

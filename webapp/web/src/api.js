@@ -44,6 +44,18 @@ export async function reject(url, reason, note) {
   );
 }
 
+export async function updateRejectReason(url, reason) {
+  // Relabel in place. Un-rejecting and re-rejecting would restamp
+  // user_rejected_at and lose when the call was originally made.
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/reject-reason`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, reason }),
+    })
+  );
+}
+
 export async function unreject(url) {
   return jsonOrThrow(
     await fetch(`${BASE}/api/unreject`, {

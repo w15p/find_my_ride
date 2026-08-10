@@ -11,7 +11,7 @@ const CURRENCY_OPTIONS = [
   ["HUF", "HUF Ft"], ["RON", "RON lei"], ["BGN", "BGN лв"], ["ISK", "ISK kr"],
 ];
 
-export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave, onTogglePin, onOverride, onMarkActive }) {
+export function ListingCard({ listing, reasons, onReject, onUnreject, onRejectReasonChange, onNoteSave, onTogglePin, onOverride, onMarkActive }) {
   const l = listing;
   const [note, setNote] = useState(l.user_note || "");
   const [noteSaving, setNoteSaving] = useState(false);
@@ -499,12 +499,36 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
             </div>
           )}
           {rejected && (
-            <button
-              onClick={() => onUnreject(l.url)}
-              className="text-sm px-3 py-1 border border-slate-300 rounded hover:bg-slate-100"
-            >
-              Un-reject
-            </button>
+            <>
+              {/* Relabel in place. Rejections are training data, so the reason
+                  needs correcting without an un-reject/re-reject round trip
+                  (which would restamp when the rejection was made). */}
+              <label className="flex items-center gap-1 text-xs text-slate-500">
+                <span>Reason:</span>
+                <select
+                  value={l.user_reject_reason || ""}
+                  onChange={(e) => onRejectReasonChange(l.url, e.target.value)}
+                  title="Change the rejection reason"
+                  className="text-xs border border-slate-300 rounded px-1 py-0.5 bg-white text-slate-700 cursor-pointer hover:border-slate-400"
+                >
+                  {/* Keep an auto-assigned or retired reason selectable so the
+                      dropdown shows the real current value rather than
+                      silently displaying someone else's first option. */}
+                  {l.user_reject_reason && !reasons.includes(l.user_reject_reason) && (
+                    <option value={l.user_reject_reason}>{l.user_reject_reason}</option>
+                  )}
+                  {reasons.map((r) => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                onClick={() => onUnreject(l.url)}
+                className="text-sm px-3 py-1 border border-slate-300 rounded hover:bg-slate-100"
+              >
+                Un-reject
+              </button>
+            </>
           )}
           {(l.status === "sold" || l.status === "expired") && onMarkActive && (
             <button

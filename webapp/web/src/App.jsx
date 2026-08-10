@@ -124,6 +124,10 @@ export default function App() {
   function onUnreject(url) {
     api.unreject(url).then(reload).catch((e) => reportError("Unreject failed", e));
   }
+  function onRejectReasonChange(url, reason) {
+    api.updateRejectReason(url, reason).then(reload)
+      .catch((e) => reportError("Change reason failed", e));
+  }
   function onNoteSave(url, note) {
     return api.setNote(url, note).catch((e) => { reportError("Save note failed", e); throw e; });
   }
@@ -227,6 +231,7 @@ export default function App() {
               reasons={reasons}
               onReject={onReject}
               onUnreject={onUnreject}
+              onRejectReasonChange={onRejectReasonChange}
               onNoteSave={onNoteSave}
               onTogglePin={onTogglePin}
               onOverride={onOverride}

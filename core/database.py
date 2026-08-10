@@ -928,6 +928,42 @@ class ListingDB:
             )
         self.conn.commit()
 
+    def update_reject_reason(self, url: str, reason: str) -> bool:
+        """Relabel an already-rejected listing, keeping user_rejected_at.
+
+        Deliberately not set_user_reject(): that stamps user_rejected_at with
+        the current time, so correcting a label would overwrite when the
+        judgement was actually made and bunch every corrected row at the
+        moment of correction. Rejections are training data - the reason is
+        the label and the timestamp is when it was assigned, so a relabel
+        must not rewrite history.
+
+        Returns False when the listing isn't rejected (nothing to relabel).
+        """
+        row = self.conn.execute(
+            """SELECT COALESCE(t.user_rejected, l.user_rejected, 0) AS rejected
+               FROM listings l
+               LEFT JOIN tenant_listing_state t
+                 ON t.listing_url = l.url AND t.tenant_id = ?
+               WHERE l.url = ?""",
+            (_DEFAULT_TENANT_ID, url),
+        ).fetchone()
+        if not row or not row["rejected"]:
+            return False
+        self.conn.execute(
+            "UPDATE listings SET user_reject_reason=? WHERE url=?", (reason, url)
+        )
+        self.conn.execute(
+            """INSERT INTO tenant_listing_state
+                   (tenant_id, listing_url, user_rejected, user_reject_reason)
+               VALUES (?, ?, 1, ?)
+               ON CONFLICT (tenant_id, listing_url) DO UPDATE SET
+                   user_reject_reason = excluded.user_reject_reason""",
+            (_DEFAULT_TENANT_ID, url, reason),
+        )
+        self.conn.commit()
+        return True
+
     def set_user_note(self, url: str, note: Optional[str]) -> None:
         value = note if (note or "").strip() else None
         self.conn.execute(
