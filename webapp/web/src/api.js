@@ -23,8 +23,11 @@ export async function fetchListings(filters, searchId) {
   return jsonOrThrow(await fetch(`${BASE}/api/listings?${qs.toString()}`));
 }
 
-export async function fetchReasons() {
-  return jsonOrThrow(await fetch(`${BASE}/api/config/reasons`));
+export async function fetchReasons(searchId) {
+  // Reasons are per-search: the seats hunt has no use for "4 door", the car
+  // hunts have none for "not a seat".
+  const qs = searchId != null ? `?search_id=${encodeURIComponent(searchId)}` : "";
+  return jsonOrThrow(await fetch(`${BASE}/api/config/reasons${qs}`));
 }
 
 export async function fetchStats() {

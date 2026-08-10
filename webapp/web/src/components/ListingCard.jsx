@@ -20,9 +20,13 @@ export function ListingCard({ listing, reasons, onReject, onUnreject, onNoteSave
   const [pickedReason, setPickedReason] = useState(reasons[0] || "");
   const [rejectComment, setRejectComment] = useState("");
 
-  // Keep the picked-reason in sync when reasons load after first paint
+  // Keep the picked-reason in sync when reasons load after first paint, and
+  // reset it when the list changes out from under us. Reasons are per-search,
+  // so switching searches would otherwise leave a stale selection that isn't
+  // in the new list (e.g. "4 door" while looking at seats).
   useEffect(() => {
-    if (!pickedReason && reasons.length) setPickedReason(reasons[0]);
+    if (!reasons.length) return;
+    if (!pickedReason || !reasons.includes(pickedReason)) setPickedReason(reasons[0]);
   }, [reasons, pickedReason]);
 
   // Autosave note on blur (only if it changed and isn't being edited)

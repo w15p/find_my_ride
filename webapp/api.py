@@ -451,9 +451,35 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/api/config/reasons")
-    def get_reasons():
+    def get_reasons(search_id: Optional[int] = None):
+        """Reject reasons for the dropdown, specific to a search when given.
+
+        Returns the search's own reasons first, then the shared ones from
+        `review.reject_reasons`. Reasons differ by what you're looking at:
+        "4 door" / "right hand drive" / "rolling shell" are meaningless on
+        the seats hunt, while "not a seat" / "cover only" are meaningless on
+        the car hunts. Without search_id (or for an unknown one) the shared
+        list is returned, so older clients keep working.
+        """
         cfg = _load_cfg()
-        return cfg.get("review", {}).get("reject_reasons", [])
+        shared = list(cfg.get("review", {}).get("reject_reasons", []))
+        if search_id is None:
+            return shared
+        row = get_db().conn.execute(
+            "SELECT slug FROM searches WHERE id=?", (search_id,)
+        ).fetchone()
+        if not row:
+            return shared
+        specific = list(
+            ((cfg.get("searches") or {}).get(row["slug"]) or {}).get("reject_reasons", [])
+        )
+        # De-dupe while preserving order, in case a search repeats a shared one.
+        seen, out = set(), []
+        for r in specific + shared:
+            if r not in seen:
+                seen.add(r)
+                out.append(r)
+        return out
 
     @app.get("/api/searches")
     def list_searches():

@@ -87,9 +87,10 @@ export default function App() {
     }
   }
 
+  // Reject reasons are per-search, so refetch when the search changes.
   useEffect(() => {
-    api.fetchReasons().then(setReasons).catch(() => setReasons([]));
-  }, []);
+    api.fetchReasons(searchId).then(setReasons).catch(() => setReasons([]));
+  }, [searchId]);
 
   // Seed the display title from the searches list using the initial searchId.
   useEffect(() => {

@@ -157,6 +157,13 @@ filters:
 searches:
   escort_mk1_lhd:
     label: "Ford Escort Mk1 LHD"
+    # Shown above the shared review.reject_reasons. Ordered by how often
+    # they've actually been used on this search.
+    reject_reasons:
+      - "4 door"
+      - "rolling shell"
+      - "right hand drive"
+      - "parts only"
     query: "ford escort mk1"
     required_keywords:
       - escort
@@ -184,6 +191,15 @@ searches:
 
   rs2000_mexico_seats:
     label: "RS2000 / Mexico Seats"
+    # Seat-specific. No body-style entries: "4 door" / "right hand drive" /
+    # "rolling shell" never applied here (the latter two were never once
+    # used on this search).
+    reject_reasons:
+      - "wrong car"
+      - "not a seat"
+      - "cover only"
+      - "single seat"
+      - "parts only"
     # Priority (highlight + float-to-top) keywords: the high-value collector
     # variants. Titles mentioning these are surfaced first and badged in the
     # UI so they're never buried under the common Ghia/GL/XR3i seats. This is
@@ -332,6 +348,15 @@ searches:
 
   alfa_giulia_gt_junior:
     label: "Alfa Romeo Giulia GT Junior"
+    # "modern car" and "not a coupe" cover this search's two recurring noise
+    # classes: the 2003-2010 GT / 916 GTV, and the Spider / Berlina / Zagato
+    # bodies that leak in from AS24's make-level fallback pages.
+    reject_reasons:
+      - "rolling shell"
+      - "modern car"
+      - "not a coupe"
+      - "right hand drive"
+      - "parts only"
     # The 105-chassis coupe (1965-1974). Query is "alfa romeo gt" - not
     # "giulia" - because on eBay "alfa romeo giulia" returns almost all
     # modern (2015+) Giulia sedans, since that's the current dominant meaning
@@ -461,18 +486,22 @@ searches:
 # Reordering, adding, or removing entries here is reflected live without a
 # code change (the API reads this list on each request).
 review:
+  # Reasons offered on EVERY search. Per-search reasons (searches.<slug>.
+  # reject_reasons) are listed above these in the dropdown, so the ones
+  # specific to what you're looking at come first.
+  #
+  # Body-style reasons like "4 door" / "right hand drive" / "rolling shell"
+  # deliberately live on the car searches only: they are meaningless for the
+  # seats hunt, where the sole effect of offering them was three stray
+  # "4 door" clicks on seat listings.
   reject_reasons:
-    - "4 door"
-    - "right hand drive"
-    - "rolling shell"
-    - "parts only"
     - "wrong variant"
-    - "too far"
     - "too expensive"
+    - "too far"
     - "not interested"
     - "duplicate"
     - "no longer available"
-    # Scam listing - e.g. photos and text lifted wholesale from a genuine ad,
+    # Scam listing - photos and text lifted wholesale from a genuine ad,
     # usually underpriced to bait contact. Seen on AutoScout24.
     - "fraud"
 
