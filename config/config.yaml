@@ -472,6 +472,9 @@ review:
     - "not interested"
     - "duplicate"
     - "no longer available"
+    # Scam listing - e.g. photos and text lifted wholesale from a genuine ad,
+    # usually underpriced to bait contact. Seen on AutoScout24.
+    - "fraud"
 
 # ─── Sanity-check (--validate) ────────────────────────────────────────────────
 validate:
