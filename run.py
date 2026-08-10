@@ -264,6 +264,16 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
             log.debug("Reject (country %s not in allowlist): %s", cc, listing.url)
             return False
 
+    # Seller-location blocklist. Scam accounts post a whole fake inventory from
+    # one address, so the location string is the cheapest reliable handle on
+    # them - far more stable than title or price, which vary per listing.
+    # Case-insensitive substring so "DE-51702" catches formatting drift in the
+    # town name. Populated by hand from confirmed-fraud clusters.
+    for bad in filt.get("blocked_locations") or []:
+        if bad.lower() in (listing.location or "").lower():
+            log.info("Reject (blocked seller location %r): %s", bad, listing.url)
+            return False
+
     return True
 
 
@@ -439,6 +449,12 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
         # Per-search filters; the cars hunt falls back to the top-level
         # `filters:` block during back-compat (Commit 1 left it in place).
         search_filters = search_cfg.get("filters") or cfg.get("filters", {})
+        # Seller blocklist is global, not per-search: a scam account posts
+        # across models (the DE-51702 cluster carried 22 Alfas and an Escort),
+        # so scoping it to one search would let the rest back in.
+        blocked = cfg.get("blocked_locations") or []
+        if blocked:
+            search_filters = {**search_filters, "blocked_locations": blocked}
 
         # Per-search site list, intersected with --sites CLI override if any.
         search_sites = search_cfg.get("sites") or list(SCRAPER_MAP.keys())

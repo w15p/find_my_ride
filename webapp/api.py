@@ -696,9 +696,17 @@ def create_app() -> FastAPI:
         # Serve assets/* from the build, and fall back to index.html for SPA routes.
         app.mount("/assets", StaticFiles(directory=str(WEB_DIST / "assets")), name="assets")
 
+        # Vite fingerprints assets/*, so those are safe to cache forever. index.html
+        # is what names the current fingerprints, so a cached copy pins the browser
+        # to the previous build and every deploy needs a manual hard refresh.
+        _NO_STORE = {"Cache-Control": "no-store, must-revalidate"}
+
+        def _index():
+            return FileResponse(WEB_DIST / "index.html", headers=_NO_STORE)
+
         @app.get("/")
         def root_index():
-            return FileResponse(WEB_DIST / "index.html")
+            return _index()
 
         @app.get("/{full_path:path}")
         def spa_fallback(full_path: str):
@@ -707,7 +715,7 @@ def create_app() -> FastAPI:
             target = WEB_DIST / full_path
             if target.is_file():
                 return FileResponse(target)
-            return FileResponse(WEB_DIST / "index.html")
+            return _index()
     else:
         @app.get("/")
         def dev_hint():

@@ -2,6 +2,18 @@
 # Copy this file to config/config.yaml and fill in your credentials.
 # Sensitive values can also be set as environment variables (see .env.example).
 
+# ─── Blocked seller locations (global, applies to every search) ───────────────
+# Confirmed-fraud sellers, matched as a case-insensitive substring against a
+# listing's location. A scam account lists a whole fake inventory from one
+# address and spans models, so this is global rather than per-search.
+#
+# DE-51702 Bergneustadt: 23 listings (22 Alfa 105-series + 1 Escort Mk1),
+#   all priced just under market, all terminated by AutoScout24 on the same
+#   day. Verified 2026-08-10 - every URL returned "no longer exists".
+blocked_locations:
+  - "DE-51702"
+  - "Bergneustadt"
+
 # ─── Search filters ───────────────────────────────────────────────────────────
 filters:
   model_keywords:
