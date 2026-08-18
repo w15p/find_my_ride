@@ -27,12 +27,15 @@ USER_AGENTS = [
 
 
 # Longest we will honour a server's Retry-After, in seconds. urllib3 obeys the
-# header verbatim by default, and eBay answers a burst 429 with a very long
-# one - so a single rate-limited marketplace parked the whole scrape for
-# 20+ minutes inside urllib3, before our own 429 handler ever saw the
+# header verbatim by default, so a single host asking for a long wait can park
+# an entire scrape inside urllib3 before our own status handling ever sees the
 # response. Backing off is right; blocking the run behind one site is not.
-# Past the cap the caller gets the 429 and decides, which for eBay means
+# Past the cap the caller gets the response and decides - for eBay that means
 # logging the marketplace and moving to the next one.
+#
+# This is a guard, not a fix for any observed incident: as of 2026-08-18 eBay
+# sends no Retry-After with its 429s, so this cap does not currently change
+# its behaviour. Measure before blaming a stall on this path.
 MAX_RETRY_AFTER = 30.0
 
 
