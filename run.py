@@ -501,12 +501,20 @@ def run_scrape(args, cfg: dict, db: ListingDB) -> list[Listing]:
             # as it passes the price ceiling instead of walking pages whose
             # every listing _should_keep would discard - and the ceiling stays
             # defined once, in filters, rather than duplicated per site.
+            # A site can override the search-level query. The seat hunts need
+            # this: eBay is already constrained to the Seats category so its
+            # query must NOT repeat the word "seats" (that would AND against
+            # the title and drop every Italian "sedili" listing), while
+            # Facebook and Marktplaats have no category filter and need the
+            # seat word in the query to avoid returning whole cars.
+            site_query = (site_overrides.get(site_key) or {}).get("query")
             scraper = SCRAPER_MAP[site_key](
                 config=site_config,
                 http_client=session,
-                query=search_cfg.get("query", "ford escort mk1"),
+                query=site_query or search_cfg.get("query", "ford escort mk1"),
                 required_keywords=search_cfg.get("required_keywords", ("escort",)),
-                extra_params={**(site_overrides.get(site_key) or {}),
+                extra_params={**{k: v for k, v in (site_overrides.get(site_key) or {}).items()
+                                 if k != "query"},
                               "_search_filters": search_filters},
             )
             log.info("Running scraper: %s (search=%s)", site_key, slug)

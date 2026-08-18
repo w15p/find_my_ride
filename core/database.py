@@ -130,6 +130,7 @@ _PATTERN_MINER_MIGRATION_ID = "004_pattern_miner"
 _WATCHED_URLS_MIGRATION_ID = "005_watched_urls"
 _ALFA_GT_JUNIOR_SEARCH_MIGRATION_ID = "006_alfa_gt_junior_search"
 _LISTING_KEY_MIGRATION_ID = "007_listing_key_backfill"
+_ALFA_GTV_SEATS_MIGRATION_ID = "008_alfa_gtv_front_seats_search"
 _DEFAULT_SEARCH_SLUG = "escort_mk1_lhd"
 _DEFAULT_SEARCH_LABEL = "Ford Escort Mk1 LHD"
 _DEFAULT_TENANT_ID = "default"
@@ -143,6 +144,8 @@ _SEATS_SEARCH_LABEL = "RS2000 / Mexico Seats"
 # Third saved search — Alfa Romeo Giulia GT Junior (105 chassis, 1965-1976).
 _ALFA_GT_JUNIOR_SEARCH_SLUG = "alfa_giulia_gt_junior"
 _ALFA_GT_JUNIOR_SEARCH_LABEL = "Alfa Romeo Giulia GT Junior"
+_ALFA_GTV_SEATS_SEARCH_SLUG = "alfa_gtv_front_seats"
+_ALFA_GTV_SEATS_SEARCH_LABEL = "Alfa Romeo GTV Front Seats (S1/S2)"
 
 # Columns on `listings` that are NOT user-state. Used by listings_select_sql()
 # below to build a deduplicated SELECT list when joining tenant_listing_state.
@@ -314,6 +317,7 @@ class ListingDB:
             self._migrate_watched_urls()
             self._migrate_alfa_gt_junior_search()
             self._migrate_listing_key()
+            self._migrate_alfa_gtv_seats_search()
             return
 
         now = datetime.utcnow().isoformat()
@@ -372,6 +376,7 @@ class ListingDB:
         self._migrate_watched_urls()
         self._migrate_alfa_gt_junior_search()
         self._migrate_listing_key()
+        self._migrate_alfa_gtv_seats_search()
 
     def _migrate_alfa_gt_junior_search(self) -> None:
         """Seed the `searches` row for the Alfa Romeo Giulia GT Junior hunt.
@@ -431,6 +436,36 @@ class ListingDB:
             self.conn.execute(
                 "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
                 (_LISTING_KEY_MIGRATION_ID, now),
+            )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
+    def _migrate_alfa_gtv_seats_search(self) -> None:
+        """Seed the `searches` row for the Alfa 105 GTV front-seat hunt.
+
+        Front seats only - the 105 rear bench is common across the range, so
+        rear-seat listings are filtered out in config rather than tracked.
+        Per-search config lives in config/config.yaml under
+        `searches.alfa_gtv_front_seats`.
+        """
+        already = self.conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE id = ?",
+            (_ALFA_GTV_SEATS_MIGRATION_ID,),
+        ).fetchone()
+        if already:
+            return
+        now = datetime.utcnow().isoformat()
+        self.conn.execute("BEGIN")
+        try:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO searches (slug, label, created_at) VALUES (?, ?, ?)",
+                (_ALFA_GTV_SEATS_SEARCH_SLUG, _ALFA_GTV_SEATS_SEARCH_LABEL, now),
+            )
+            self.conn.execute(
+                "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+                (_ALFA_GTV_SEATS_MIGRATION_ID, now),
             )
             self.conn.execute("COMMIT")
         except Exception:

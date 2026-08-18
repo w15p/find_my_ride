@@ -331,7 +331,11 @@ searches:
         # Hard mounting / structural parts (multiple prior rejects)
         - "crossmember"
         - "cross member"
-        - "sitz querträger"       # German equivalent
+        # ASCII-folded on purpose: _matches_reject_keyword folds the title
+        # to ASCII but not the keyword, so an entry containing an umlaut
+        # can never match. This one read "sitz quertraeger" with an
+        # a-umlaut until 2026-08-18 and was silently dead.
+        - "sitz quertrager"       # German equivalent
         - "seat bracket"
         - "seat hinge"
         - "seat bolt"
@@ -358,6 +362,176 @@ searches:
         #   "carpet" / "headlining" / "dashboard" — same risk as door card
         #   "seat runner" — sometimes appears in legit listings; punt to miner
 
+  alfa_gtv_front_seats:
+    label: "Alfa Romeo GTV Front Seats (S1/S2)"
+    # Front seats only - the rear bench is shared across the 105 range, so a
+    # rear-seat listing is never what this hunt is looking for. "rear seats"
+    # leads the list because it is the expected top noise class.
+    reject_reasons:
+      - "rear seats"
+      - "wrong car"
+      - "not a seat"
+      - "cover only"
+      - "single seat"
+      - "reproduction"
+      - "parts only"
+    # Series 1 (1750 GTV, 1967-72) and Series 2 (2000 GTV, 1971-76) seats are
+    # the target. Titles that name the exact car are worth surfacing first.
+    priority_keywords:
+      - gtv
+      - "1750"
+      - "2000"
+      - bertone
+    # Base query for sites with no category filter. Per-site overrides below
+    # tighten it where the site supports something better.
+    query: "alfa romeo sedili"
+    # OR gate on the title - a listing passes if it mentions any seat word.
+    # Multi-language because the 105 seat market is overwhelmingly Italian,
+    # then German and Dutch. ASCII-folded: the title is folded before
+    # matching, so "sieges" catches "sieges" with a grave accent.
+    required_keywords:
+      - seat
+      - seats
+      - sedile
+      - sedili
+      - poltrone
+      - poltrona
+      - sitz
+      - sitze
+      - vordersitze
+      - stoel
+      - stoelen
+      - voorstoelen
+      - siege
+      - sieges
+      - asiento
+      - asientos
+    # Parts marketplaces only, matching the Escort seats hunt. autoscout24,
+    # theparking and classicdriver are whole-car sites with no parts stock.
+    sites:
+      - ebay
+      - marktplaats
+      - facebook
+    site_overrides:
+      ebay:
+        # Category 33701 IS "Seats" - verified against the Taxonomy API on
+        # every marketplace below (Seats/Sitze/Sedili/Sieges/Asientos/
+        # Stoelen). Because the category already restricts to seats, the
+        # query must not also say "seats": eBay ANDs query words against the
+        # title, which would drop every Italian "sedili" listing.
+        query: "alfa"
+        marketplaces:
+          - EBAY_IT   # dominant market for 105-series parts
+          - EBAY_DE
+          - EBAY_GB
+          - EBAY_FR
+          - EBAY_NL
+          - EBAY_ES
+          - EBAY_AT
+        category_ids:
+          EBAY_IT: "33701"
+          EBAY_DE: "33701"
+          EBAY_GB: "33701"
+          EBAY_FR: "33701"
+          EBAY_NL: "33701"
+          EBAY_ES: "33701"
+          EBAY_AT: "33701"
+      # No category filter on either of these, so the seat word has to be in
+      # the query or they return whole cars.
+      facebook:
+        query: "alfa romeo sedili"
+      marktplaats:
+        query: "alfa romeo stoelen"
+    filters:
+      # A pair of restored 105 GTV front seats runs roughly 800-3000 EUR;
+      # cores and unrestored pairs sit lower. Under $200 is badges, runners
+      # and trim clips; over $6000 is a whole interior or a car.
+      min_price_usd: 200
+      max_price_usd: 6000
+      # Seats carry no meaningful year of their own.
+      year_from: null
+      year_to: null
+      # Mandatory anchor - the title must name the car, not just a seat.
+      # "alfa" alone is the reliable one; the rest catch listings that omit
+      # the marque but name the model or the bodybuilder.
+      require_title_keywords:
+        - alfa
+        - gtv
+        - giulia
+        - bertone
+        - "105"
+        - "115"
+      reject_title_keywords:
+        # Rear seats - the explicit non-goal. Written ASCII-folded because
+        # the matcher folds the title but not the keyword.
+        - "rear seat"
+        - "rear seats"
+        - "back seat"
+        - "back seats"
+        - "rear bench"
+        - "bench seat"
+        - "sedile posteriore"
+        - "sedili posteriori"
+        - "posteriore"
+        - "posteriori"
+        - "divanetto"
+        - "divano posteriore"
+        - "panchetta"
+        - "rucksitz"
+        - "rucksitze"
+        - "rucksitzbank"
+        - "ruckbank"
+        - "sitzbank"
+        - "achterbank"
+        - "achterstoel"
+        - "banquette"
+        - "banquette arriere"
+        - "siege arriere"
+        - "sieges arriere"
+        - "asiento trasero"
+        - "asientos traseros"
+        # Modern Alfas that share the marque and, for "GT" and "GTV", the
+        # model name. The 916 GTV (1995-2006) and 2003-2010 GT are the two
+        # that collide directly.
+        - "147"
+        - "156"
+        - "159"
+        - "166"
+        - "giulietta"
+        - "mito"
+        - "stelvio"
+        - "tonale"
+        - "brera"
+        - "spider 916"
+        - "916"
+        - "gtv6"
+        - "alfetta"
+        - "alfasud"
+        - "sprint veloce 1.5"
+        # Not the seat itself - trim, hardware and adjacent parts that still
+        # mention a seat word.
+        - "seat belt"
+        - "seatbelt"
+        - "cintura"
+        - "cinture"
+        - "seat cover"
+        - "coprisedili"
+        - "seat rail"
+        - "seat runner"
+        - "guide sedili"
+        - "seat bracket"
+        - "seat hinge"
+        - "seat mount"
+        - "seat frame only"
+        - "headrest"
+        - "poggiatesta"
+        - "sitzheizung"
+        - "seat badge"
+        # Scale models and toys - "1:18 Alfa GTV" matches every anchor.
+        - "1:18"
+        - "1:43"
+        - "modellino"
+        - "modellauto"
   alfa_giulia_gt_junior:
     label: "Alfa Romeo Giulia GT Junior"
     # "modern car" and "not a coupe" cover this search's two recurring noise
