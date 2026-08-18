@@ -37,6 +37,7 @@ from dotenv import load_dotenv
 from core.countries import enhance_location
 from core.currency import format_price, rates_available, usd_value
 from core.database import ListingDB, _DEFAULT_SEARCH_LABEL, _DEFAULT_SEARCH_SLUG
+from core.listing_key import stable_key
 from core.http_client import make_session, polite_get
 from core.models import Listing
 from core.notifier import EmailNotifier
@@ -380,9 +381,18 @@ def _phash_distance(a: Optional[str], b: Optional[str]) -> Optional[int]:
 def _find_canonical(listing: Listing, db: ListingDB, cfg: dict) -> Optional[str]:
     """Return the URL of an existing canonical row that matches `listing`, if any.
 
-    Two match rules:
-      A. Fingerprint identical (year+country+tokens+price-bucket — strongest).
-      B. phash ≤ phash_max_distance AND prices within 10%.
+    Three match rules, strongest first:
+      A. Same site-issued listing id (see core.listing_key) — an exact identity
+         match, so it needs no threshold and no year/country gate.
+      B. Fingerprint identical (year+country+tokens+price-bucket).
+      C. phash ≤ phash_max_distance AND prices within 10%.
+
+    Rule A exists because the same advert reaches us under more than one URL:
+    AutoScout24 serves every locale domain plus a category-token slug variant,
+    Facebook differs by a trailing slash, and an eBay item number resolves on
+    every national domain. Those rows defeat B and C — an aggregator that omits
+    the seller location changes the fingerprint, and a re-encoded image changes
+    the phash — so without A they showed up in the grid twice.
 
     The phash computation auto-crops blurred padding (see `_auto_crop_sharp`)
     so cross-source duplicates whose photos share the same source asset land
@@ -390,6 +400,12 @@ def _find_canonical(listing: Listing, db: ListingDB, cfg: dict) -> Optional[str]
     preview. That keeps the threshold tight enough to avoid false positives
     between two genuinely-different cars priced the same.
     """
+    key = stable_key(listing.url)
+    if key:
+        row = db.find_by_listing_key(key, exclude_url=listing.url)
+        if row:
+            return row["url"]
+
     max_dist = cfg.get("filters", {}).get("phash_max_distance", 8)
     candidates = db.find_duplicate_candidates(
         year=listing.year, country_code=listing.country_code,

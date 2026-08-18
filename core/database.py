@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from core.models import Listing
+from core.listing_key import stable_key
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS listings (
@@ -128,6 +129,7 @@ _ORPHAN_BACKFILL_MIGRATION_ID = "003_orphan_backfill"
 _PATTERN_MINER_MIGRATION_ID = "004_pattern_miner"
 _WATCHED_URLS_MIGRATION_ID = "005_watched_urls"
 _ALFA_GT_JUNIOR_SEARCH_MIGRATION_ID = "006_alfa_gt_junior_search"
+_LISTING_KEY_MIGRATION_ID = "007_listing_key_backfill"
 _DEFAULT_SEARCH_SLUG = "escort_mk1_lhd"
 _DEFAULT_SEARCH_LABEL = "Ford Escort Mk1 LHD"
 _DEFAULT_TENANT_ID = "default"
@@ -237,6 +239,7 @@ _MIGRATIONS = [
     ("user_year",          "ALTER TABLE listings ADD COLUMN user_year INTEGER"),
     ("user_price_currency","ALTER TABLE listings ADD COLUMN user_price_currency TEXT"),
     ("user_price_value",   "ALTER TABLE listings ADD COLUMN user_price_value INTEGER"),
+    ("listing_key",        "ALTER TABLE listings ADD COLUMN listing_key TEXT"),
     ("description_language",   "ALTER TABLE listings ADD COLUMN description_language TEXT"),
     ("description_translated", "ALTER TABLE listings ADD COLUMN description_translated TEXT"),
     ("prev_price_value",       "ALTER TABLE listings ADD COLUMN prev_price_value INTEGER"),
@@ -274,6 +277,7 @@ class ListingDB:
         self._apply_structural_migrations()
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_fingerprint ON listings(fingerprint)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_canonical ON listings(canonical_url)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_key ON listings(listing_key)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_search_matches_listing ON search_matches(listing_url)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_tls_listing ON tenant_listing_state(listing_url)")
@@ -309,6 +313,7 @@ class ListingDB:
             self._migrate_pattern_miner()
             self._migrate_watched_urls()
             self._migrate_alfa_gt_junior_search()
+            self._migrate_listing_key()
             return
 
         now = datetime.utcnow().isoformat()
@@ -366,6 +371,7 @@ class ListingDB:
         self._migrate_pattern_miner()
         self._migrate_watched_urls()
         self._migrate_alfa_gt_junior_search()
+        self._migrate_listing_key()
 
     def _migrate_alfa_gt_junior_search(self) -> None:
         """Seed the `searches` row for the Alfa Romeo Giulia GT Junior hunt.
@@ -390,6 +396,41 @@ class ListingDB:
             self.conn.execute(
                 "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
                 (_ALFA_GT_JUNIOR_SEARCH_MIGRATION_ID, now),
+            )
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
+
+    def _migrate_listing_key(self) -> None:
+        """Backfill `listing_key` for rows saved before the column existed.
+
+        Derived purely from `url`, so it is safe to recompute and carries no
+        user state. Only fills NULLs, leaving any row the scraper has already
+        keyed untouched. Linking the duplicates this exposes is deliberately
+        NOT done here - merging two rows means choosing which one keeps the
+        stars and notes, which is a reviewed operation rather than a silent
+        startup side effect.
+        """
+        already = self.conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE id = ?",
+            (_LISTING_KEY_MIGRATION_ID,),
+        ).fetchone()
+        if already:
+            return
+        now = datetime.utcnow().isoformat()
+        rows = self.conn.execute(
+            "SELECT url FROM listings WHERE listing_key IS NULL"
+        ).fetchall()
+        updates = [(k, r["url"]) for r in rows if (k := stable_key(r["url"]))]
+        self.conn.execute("BEGIN")
+        try:
+            self.conn.executemany(
+                "UPDATE listings SET listing_key = ? WHERE url = ?", updates
+            )
+            self.conn.execute(
+                "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+                (_LISTING_KEY_MIGRATION_ID, now),
             )
             self.conn.execute("COMMIT")
         except Exception:
@@ -704,8 +745,8 @@ class ListingDB:
                 year, location, country_code, image_url, steering, body_type,
                 description, description_language, description_translated,
                 image_phash, fingerprint, canonical_url, sold_signals_count,
-                scraped_at, status, sold_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                scraped_at, status, sold_at, listing_key)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             [
                 (
                     l.url, l.site_name, l.title, l.price, l.price_value,
@@ -716,6 +757,7 @@ class ListingDB:
                     l.sold_signals_count,
                     l.scraped_at.isoformat(), l.status,
                     l.sold_at.isoformat() if l.sold_at else None,
+                    stable_key(l.url),
                 )
                 for l in listings
             ],
@@ -843,6 +885,21 @@ class ListingDB:
         )
         self.conn.commit()
         return "changed"
+
+    def find_by_listing_key(self, key: str, exclude_url: str) -> Optional[sqlite3.Row]:
+        """Return an existing canonical row sharing this site-issued listing id.
+
+        The id is the site's own identifier for the advert, so a hit is an
+        exact-identity match rather than a similarity score - no threshold and
+        no year/country gate. Oldest row wins so the canonical target is stable
+        across re-scrapes.
+        """
+        return self.conn.execute(
+            """SELECT url FROM listings
+               WHERE listing_key = ? AND url != ? AND canonical_url IS NULL
+               ORDER BY scraped_at ASC LIMIT 1""",
+            (key, exclude_url),
+        ).fetchone()
 
     def update_dedupe_fields(self, url: str, *, image_phash: Optional[str], fingerprint: Optional[str], canonical_url: Optional[str]) -> None:
         """Backfill phash/fingerprint/canonical on an existing row."""
