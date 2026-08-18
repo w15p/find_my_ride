@@ -26,10 +26,28 @@ USER_AGENTS = [
 ]
 
 
+# Longest we will honour a server's Retry-After, in seconds. urllib3 obeys the
+# header verbatim by default, and eBay answers a burst 429 with a very long
+# one - so a single rate-limited marketplace parked the whole scrape for
+# 20+ minutes inside urllib3, before our own 429 handler ever saw the
+# response. Backing off is right; blocking the run behind one site is not.
+# Past the cap the caller gets the 429 and decides, which for eBay means
+# logging the marketplace and moving to the next one.
+MAX_RETRY_AFTER = 30.0
+
+
+class _CappedRetry(Retry):
+    """Retry that honours Retry-After but never waits longer than the cap."""
+
+    def get_retry_after(self, response):
+        after = super().get_retry_after(response)
+        return None if after is None else min(after, MAX_RETRY_AFTER)
+
+
 def make_session(retries: int = 3, backoff: float = 1.5) -> requests.Session:
     """Create a requests.Session with retry logic and a randomised User-Agent."""
     session = requests.Session()
-    retry = Retry(
+    retry = _CappedRetry(
         total=retries,
         backoff_factor=backoff,
         status_forcelist=[429, 500, 502, 503, 504],
