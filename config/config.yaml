@@ -454,14 +454,51 @@ searches:
       # Mandatory anchor - the title must name the car, not just a seat.
       # "alfa" alone is the reliable one; the rest catch listings that omit
       # the marque but name the model or the bodybuilder.
+      # A 105-era anchor, NOT just "alfa". The first pass anchored on the
+      # marque and pulled 295 listings of which zero were 105s: eBay's seat
+      # inventory is overwhelmingly modern, and blocklisting model numbers
+      # is a losing race against a range that keeps growing. Requiring a
+      # positive signal that the listing IS the 1963-1977 car inverts that -
+      # it dropped 277 of the 295 on its own.
+      #
+      # Deliberately NOT anchors: "alfa" (matches the whole marque), "gtv"
+      # (the 916 GTV, 1995-2006, outnumbers the 105 one), "giulia" (the
+      # 2016+ sedan dominates the name today - "giulia gt" is safe because
+      # no modern Giulia GT exists).
       require_title_keywords:
-        - alfa
-        - gtv
-        - giulia
-        - bertone
-        - "105"
+        - "105"          # chassis code, 105/115 series
         - "115"
+        - junior         # GT 1300/1600 Junior
+        - bertone        # the coupe's bodybuilder
+        - scalino        # "step front" 1963-68 nose, IT
+        - "step front"
+        - stepnose
+        - "sprint gt"
+        - "giulia gt"
+        - "gt veloce"
+        - "1750"         # 1750 GTV (S1)
+        - "1300"
+        - "1600"
+        - "gtv 2000"     # 2000 GTV (S2)
+        - "2000 gtv"
+        - gta
+        - "coda tronca"
+        - kamm
+      # The 105 coupe ended in 1977, so a model year at or past 1978 in the
+      # title means a later car. 2000 is excepted: the range includes a
+      # 2000 GTV, so a bare "2000" is a model designation, not a year.
+      reject_title_year_from: 1978
+      reject_title_year_except:
+        - 2000
       reject_title_keywords:
+        # Wrong body. The 105/115 Spider shares the chassis codes with the
+        # coupe and so clears the anchor gate, but its seats are not the
+        # coupe's and the hunt is for GTV S1/S2.
+        - spider
+        - duetto
+        - zagato
+        - berlina
+        - montreal
         # Rear seats - the explicit non-goal. Written ASCII-folded because
         # the matcher folds the title but not the keyword.
         - "rear seat"
@@ -494,9 +531,18 @@ searches:
         # model name. The 916 GTV (1995-2006) and 2003-2010 GT are the two
         # that collide directly.
         - "147"
+        - "155"
         - "156"
         - "159"
+        - "164"
         - "166"
+        - "145"
+        - "146"
+        - "952"          # modern Giulia platform code
+        - "quadrifoglio"
+        - "twin spark"
+        - "tspark"
+        - "dedra"
         - "giulietta"
         - "mito"
         - "stelvio"

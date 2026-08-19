@@ -230,6 +230,22 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
         log.debug("Reject (title keyword): %s — %s", listing.url, listing.title)
         return False
 
+    # Model year printed in the title. For a car that went out of production
+    # decades before the site's inventory did, a year in the title is the
+    # strongest single signal that a listing is for a later car - eBay parts
+    # titles are full of fitment ranges like "2016-2022" or "1997-2003".
+    # Numbers in `reject_title_year_except` are model designations rather
+    # than years: the 105 range includes a 2000 GTV, so a bare "2000" must
+    # not be read as the year 2000.
+    reject_year_from = filt.get("reject_title_year_from")
+    if reject_year_from:
+        exceptions = {int(y) for y in (filt.get("reject_title_year_except") or [])}
+        for found in re.findall(r"\b(?:19|20)\d{2}\b", _ascii_fold((listing.title or "").lower())):
+            value = int(found)
+            if value >= int(reject_year_from) and value not in exceptions:
+                log.debug("Reject (title year %d >= %s): %s", value, reject_year_from, listing.url)
+                return False
+
     # USD price window
     min_usd = filt.get("min_price_usd")
     max_usd = filt.get("max_price_usd")
