@@ -189,6 +189,20 @@ def _should_keep(listing: Listing, filt: dict, log: logging.Logger) -> bool:
             log.debug("Reject (missing required title keyword): %s", listing.url)
             return False
 
+    # Same idea as require_title_keywords but matched as regexes against the
+    # ASCII-folded title, so an anchor can demand a word boundary. Numeric
+    # anchors need that: the Alfa seats hunt anchors on the 105/115 chassis
+    # codes, and as bare substrings those matched inside part numbers - a
+    # modern 5-door Giulia seat set with MPN 1156334 contains "115". Kept as
+    # a separate key so the substring semantics the other searches rely on
+    # (where "escort" must still match "escorts") are untouched.
+    require_patterns = filt.get("require_title_patterns")
+    if require_patterns:
+        folded_title = _ascii_fold((listing.title or "").lower())
+        if not any(re.search(p, folded_title) for p in require_patterns):
+            log.debug("Reject (no required title pattern): %s", listing.url)
+            return False
+
     year_from = filt.get("year_from")
     year_to = filt.get("year_to")
 

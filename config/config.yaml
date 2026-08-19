@@ -465,25 +465,26 @@ searches:
       # (the 916 GTV, 1995-2006, outnumbers the 105 one), "giulia" (the
       # 2016+ sedan dominates the name today - "giulia gt" is safe because
       # no modern Giulia GT exists).
-      require_title_keywords:
-        - "105"          # chassis code, 105/115 series
-        - "115"
-        - junior         # GT 1300/1600 Junior
-        - bertone        # the coupe's bodybuilder
-        - scalino        # "step front" 1963-68 nose, IT
-        - "step front"
-        - stepnose
-        - "sprint gt"
-        - "giulia gt"
-        - "gt veloce"
-        - "1750"         # 1750 GTV (S1)
-        - "1300"
-        - "1600"
-        - "gtv 2000"     # 2000 GTV (S2)
-        - "2000 gtv"
-        - gta
-        - "coda tronca"
-        - kamm
+      # Regexes, not substrings: the numeric anchors must be word-bounded or
+      # they match inside part numbers (MPN 1156334 contains "115").
+      require_title_patterns:
+        - '\b105\b'          # chassis code, 105/115 series
+        - '\b115\b'
+        - '\bjunior\b'       # GT 1300/1600 Junior
+        - '\bbertone\b'      # the coupe's bodybuilder
+        - '\bscalino\b'      # "step front" 1963-68 nose, IT
+        - 'step\s*(front|nose)'
+        - 'sprint\s*gt\b'
+        - 'giulia\s*gt\b'
+        - 'gt\s*veloce\b'
+        - '\b1750\b'         # 1750 GTV (S1)
+        - '\b1300\b'
+        - '\b1600\b'
+        - 'gtv\s*2000\b'     # 2000 GTV (S2)
+        - '\b2000\s*gtv\b'
+        - '\bgta\b'
+        - 'coda\s*tronca'
+        - '\bkamm\b'
       # The 105 coupe ended in 1977, so a model year at or past 1978 in the
       # title means a later car. 2000 is excepted: the range includes a
       # 2000 GTV, so a bare "2000" is a model designation, not a year.
