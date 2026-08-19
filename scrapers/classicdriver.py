@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 from core.http_client import polite_get
+from core.year import extract_year
 from core.models import Listing
 from scrapers.base import BaseScraper
 
@@ -130,9 +131,8 @@ class ClassicDriverScraper(BaseScraper):
 
 
 def _extract_any_year(text: str) -> Optional[int]:
-    """Extract the first plausible car year (1950–2010) from text."""
-    match = re.search(r"\b(19[5-9]\d|200\d|201[0-9])\b", text)
-    return int(match.group(1)) if match else None
+    """Extract the first plausible car year (1950-2019) from text."""
+    return extract_year(text, lo=1950, hi=2019)
 
 
 def _parse_price_string(raw: Optional[str]) -> tuple[Optional[int], Optional[str]]:

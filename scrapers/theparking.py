@@ -8,6 +8,7 @@ import time
 from typing import List, Optional, Tuple
 
 from core.http_client import USER_AGENTS
+from core.year import extract_year
 from core.models import Listing, MAX_DESCRIPTION_CHARS
 from scrapers.base import BaseScraper
 
@@ -516,11 +517,10 @@ class TheParkingScraper(BaseScraper):
                 description = (f"Listed via theparking.eu (source: {domain})"
                                if domain else "Listed via theparking.eu")
 
-            year = None
-            for y in _YEAR_RE.findall(title + " " + detail_url.replace("-", " ")):
-                if 1950 <= int(y) <= 1990:
-                    year = int(y)
-                    break
+            # extract_year skips model designations, so a "GTV 2000" slug in
+            # the URL no longer reads as the year 2000.
+            year = extract_year(title + " " + detail_url.replace("-", " "),
+                                lo=1950, hi=1990)
 
             return Listing(
                 # The real seller URL when we resolved it: the card then links

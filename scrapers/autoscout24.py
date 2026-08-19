@@ -7,6 +7,7 @@ from typing import List, Optional
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 from core.http_client import USER_AGENTS
+from core.year import extract_year
 from core.models import Listing, MAX_DESCRIPTION_CHARS
 from scrapers.base import BaseScraper
 
@@ -344,13 +345,9 @@ class AutoScout24Scraper(BaseScraper):
 
 
 def _extract_year_from_text(text: str) -> Optional[int]:
-    """AutoScout24 shows registration as MM/YYYY — extract the year."""
-    match = re.search(r"\b\d{2}/(19[5-9]\d|20[0-2]\d)\b", text)
-    if match:
-        return int(match.group(1))
-    # Fallback: bare year
-    match = re.search(r"\b(19[5-9]\d|20[0-2]\d)\b", text)
-    return int(match.group(1)) if match else None
+    """AutoScout24 shows registration as MM/YYYY; extract_year prefers that
+    form over a bare number and skips model designations like "2000"."""
+    return extract_year(text, lo=1950, hi=2029)
 
 
 def _extract_location(text: str) -> Optional[str]:

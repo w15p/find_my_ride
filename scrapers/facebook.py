@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from core.countries import country_from_display
+from core.year import extract_year
 from core.http_client import USER_AGENTS
 from core.models import Listing, MAX_DESCRIPTION_CHARS
 from scrapers.base import BaseScraper
@@ -42,6 +43,18 @@ def _fb_proxy() -> Optional[dict]:
     return {"server": server} if server else None
 
 
+def _is_auth_redirect(url: Optional[str]) -> bool:
+    """True if `url` is Facebook's login or checkpoint wall.
+
+    Landing here means the request was not authenticated - either the session
+    really is dead, or it egressed from an IP Facebook does not trust (the
+    datacenter EIP rather than the residential tunnel). Both are session-level
+    problems, and neither is a property of the listing being fetched.
+    """
+    lowered = (url or "").lower()
+    return "/login" in lowered or "/checkpoint" in lowered
+
+
 def _check_session_valid(page, log) -> bool:
     """Probe whether the FB session in `page`'s context is still authenticated.
 
@@ -59,8 +72,7 @@ def _check_session_valid(page, log) -> bool:
         page.goto(f"{BASE_URL}/marketplace/", wait_until="domcontentloaded", timeout=20000)
         # Give the SPA a moment to issue any client-side redirect.
         time.sleep(2.0)
-        url = (page.url or "").lower()
-        if "/login" in url or "/checkpoint" in url:
+        if _is_auth_redirect(page.url):
             log.warning(
                 "Facebook session invalid (landed on %s). "
                 "Skipping Facebook scrape this tick — run `python run.py --fb-login` to re-auth.",
@@ -374,7 +386,22 @@ def fetch_watched_listings(
             except Exception as exc:
                 log.debug("Watched fetch failed for %s: %s", url, exc)
 
-            status = "ok" if listing else "fetch_failed"
+            # An auth redirect is not a bad listing: reporting it as
+            # fetch_failed reads as "this URL is dead" when the real cause is
+            # session- or egress-level. The upfront probe can pass and an item
+            # page still redirect, because Facebook gates item detail harder
+            # than /marketplace/.
+            if listing:
+                status = "ok"
+            elif _is_auth_redirect(page.url):
+                status = "session_invalid"
+                log.warning(
+                    "Facebook auth wall on %s (landed on %s). Session is logged out, "
+                    "or the request did not egress via FB_PROXY.",
+                    url, page.url,
+                )
+            else:
+                status = "fetch_failed"
             results.append((url, listing, status))
             time.sleep(random.uniform(2.0, 4.0))
         ctx.close()
@@ -695,10 +722,7 @@ def _extract_item_id(url: str) -> Optional[str]:
 
 
 def _extract_any_year(text: Optional[str]) -> Optional[int]:
-    if not text:
-        return None
-    match = re.search(r"\b(19[5-9]\d|200\d|201[0-9])\b", text)
-    return int(match.group(1)) if match else None
+    return extract_year(text, lo=1950, hi=2019)
 
 
 def login_and_save_session(profile_dir: str) -> None:
