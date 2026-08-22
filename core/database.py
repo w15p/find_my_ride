@@ -267,13 +267,43 @@ _TLS_MIGRATIONS = [
 
 
 class ListingDB:
-    def __init__(self, db_path: str = "listings.db") -> None:
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+    def __init__(
+        self,
+        db_path: str = "listings.db",
+        *,
+        ensure_schema: bool = True,
+        busy_timeout: float = 30.0,
+    ) -> None:
+        """Open the listings database.
+
+        `ensure_schema` runs the schema, migrations and index DDL. Pass False
+        on a per-request connection to skip repeating that work on every call.
+        Note this is an efficiency measure, not a locking one: the DDL is all
+        IF NOT EXISTS, so once the schema is current it is a no-op that takes
+        no write lock (measured: opening with ensure_schema=True while another
+        process holds BEGIN IMMEDIATE returns in 0.00s). One process must
+        still ensure the schema - the CLI does it on every run, and the web
+        app does it once at startup.
+
+        `busy_timeout` is how long a write waits for the lock before giving
+        up. Python's sqlite3 default is 5s, which a multi-minute scrape
+        overruns easily; 30s rides out its individual write bursts, which are
+        short even when the run is long.
+        """
+        self.conn = sqlite3.connect(
+            db_path, check_same_thread=False, timeout=busy_timeout
+        )
         self.conn.row_factory = sqlite3.Row
         # WAL lets the CLI scraper and the FastAPI process share the file
         # without writer-lock contention. Per-connection PRAGMA but applies
         # file-wide once set, so it's harmless on every open.
         self.conn.execute("PRAGMA journal_mode=WAL")
+        # connect(timeout=) covers the Python driver; the PRAGMA covers waits
+        # entered inside SQLite itself. Set both or a busy wait can still
+        # bail early.
+        self.conn.execute(f"PRAGMA busy_timeout={int(busy_timeout * 1000)}")
+        if not ensure_schema:
+            return
         self.conn.executescript(SCHEMA)
         self.conn.executescript(SCHEMA_SEARCHES)
         self._apply_migrations()

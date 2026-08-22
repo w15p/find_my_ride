@@ -258,11 +258,21 @@ def create_app() -> FastAPI:
             )
         return JSONResponse(status_code=500, content={"detail": f"SQLite error: {exc}"})
 
+    # Bring the schema and migrations up to date exactly once, at startup.
+    ListingDB(_resolved_db, ensure_schema=True)
+
     def get_db() -> ListingDB:
         # Per-request connection avoids sqlite cross-thread complaints under
         # uvicorn's threadpool, and keeps cleanup automatic when the handler
         # returns.
-        return ListingDB(str(ROOT / db_path) if not Path(db_path).is_absolute() else db_path)
+        #
+        # ensure_schema=False skips re-running the schema/migration/index DDL
+        # on every request; the startup call above keeps it current. This is
+        # an efficiency change only - that DDL is all IF NOT EXISTS and takes
+        # no write lock once the schema is current, so it was never the cause
+        # of the "Database is busy" errors. The busy_timeout on the connection
+        # is what fixes those.
+        return ListingDB(_resolved_db, ensure_schema=False)
 
     def _priority_keywords_for(search_id: int) -> list[str]:
         """Lowercased priority_keywords for a search_id, or [] if none.
