@@ -855,11 +855,21 @@ class ListingDB:
         return row[0] if row else 0
 
     def reset_sold_signal(self, url: str) -> None:
-        """Reset the counter when a listing is observed as still active."""
+        """Reset the counter when a listing is observed as still active.
+
+        The commit is load-bearing, not tidiness. sqlite3 opens a transaction
+        on the first DML statement and holds the write lock until commit, and
+        validate calls this for every listing it finds still active - between
+        HTTP fetches that are deliberately slowed by polite_get. Without the
+        commit the lock stayed held for the whole run, so any reject or pin
+        from the UI failed with "database is locked" for as long as validate
+        was going.
+        """
         self.conn.execute(
             "UPDATE listings SET sold_signals_count = 0 WHERE url=? AND sold_signals_count > 0",
             (url,),
         )
+        self.conn.commit()
 
     def mark_active(self, url: str) -> bool:
         """User-facing un-sold action: flip status back to active, clear the
